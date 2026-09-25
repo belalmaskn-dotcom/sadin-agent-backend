@@ -54,8 +54,7 @@ app.post('/webhook', async (req, res) => {
 
     await sendWhatsAppMessage(from, reply);
   } catch (err) {
-    console.error('❌ خطأ في معالجة الرسالة:', err.message);
-  }
+console.error('❌ تفاصيل الخطأ:', JSON.stringify(err.response?.data || err.message, null, 2));  }
 });
 
 async function sendWhatsAppMessage(to, text) {
