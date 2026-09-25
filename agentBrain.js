@@ -49,11 +49,10 @@ async function callClaude(system, messages, maxTokens = 700) {
     );
     return res.data.content.map((b) => b.text || '').join('');
   } catch (err) {
-    console.error('تفاصيل خطأ Claude API:', JSON.stringify(err.response?.data || err.message));
+console.error('تفاصيل خطأ Claude API:', JSON.stringify(err.response?.data || err.message, null, 2));
     throw err;
   }
 }
-
 async function generateReply(history, userText) {
   const messages = [...history, { role: 'user', content: userText }];
 
