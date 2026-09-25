@@ -53,25 +53,7 @@ async function callClaude(system, messages, maxTokens = 700) {
     throw err;
   }
 }
-  const res = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    { model: MODEL, max_tokens: maxTokens, system, messages },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-    }
-  );
-  return res.data.content.map((b) => b.text || '').join('');
-}
 
-/**
- * @param {Array} history - [{role:'user'|'assistant', content:string}, ...]
- * @param {string} userText - آخر رسالة من العميل
- * @returns {Promise<string>} - الرد النهائي اللي هيتبعت للعميل على واتساب
- */
 async function generateReply(history, userText) {
   const messages = [...history, { role: 'user', content: userText }];
 
@@ -89,7 +71,6 @@ async function generateReply(history, userText) {
     return parsed.reply;
   }
 
-  // عندنا معايير كفاية — ندوّر في الفهرس المحلي الحقيقي
   const matches = searchProperties({
     city: parsed.criteria.city,
     district: parsed.criteria.district,
@@ -114,4 +95,4 @@ async function generateReply(history, userText) {
   return finalReply.trim();
 }
 
-module.exports = { generateReply };
+module.exports = {
