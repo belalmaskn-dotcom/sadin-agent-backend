@@ -35,6 +35,24 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `أنت مساعد عقاري بترد عل
 لا تخترع أي عقار مش موجود في النتايج. رجّع نص عادي (مش JSON) — ده الرد النهائي اللي هيتبعت للعميل.`;
 
 async function callClaude(system, messages, maxTokens = 700) {
+  try {
+    const res = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      { model: MODEL, max_tokens: maxTokens, system, messages },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+      }
+    );
+    return res.data.content.map((b) => b.text || '').join('');
+  } catch (err) {
+    console.error('تفاصيل خطأ Claude API:', JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
+}
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     { model: MODEL, max_tokens: maxTokens, system, messages },
