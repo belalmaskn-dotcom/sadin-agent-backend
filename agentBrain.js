@@ -95,4 +95,4 @@ async function generateReply(history, userText) {
   return finalReply.trim();
 }
 
-module.exports = {
+module.exports = { generateReply };
