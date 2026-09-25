@@ -4,7 +4,7 @@ const axios = require('axios');
 const { searchProperties } = require('./search');
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = 'claude-sonnet-4-6';
+const MODEL = 'claude-sonnet-5';
 
 const EXTRACTION_SYSTEM_PROMPT = `أنت مساعد عقاري ذكي بترد على عملاء تواصلوا عبر واتساب مع مكتب عقاري في السعودية.
 مهمتك: تتكلم بأسلوب ودود وطبيعي، وتسأل بلطف عشان تجمع تدريجيًا:
