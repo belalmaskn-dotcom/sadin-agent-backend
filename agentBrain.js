@@ -1,10 +1,14 @@
 // agentBrain.js
-// مساعد واتساب لمكتب سدّين للعقار
+// Sadin AI Agent
+// مسؤول عن فهم العميل والرد العقاري
+// حالة المعاينة نفسها يتم حفظها وإدارتها من server.js
 
 const axios = require('axios');
 const { searchProperties } = require('./search');
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ANTHROPIC_API_KEY =
+  process.env.ANTHROPIC_API_KEY;
+
 const MODEL = 'claude-sonnet-5';
 
 
@@ -12,12 +16,14 @@ const MODEL = 'claude-sonnet-5';
 // بيانات التواصل
 // =====================================================
 
-const CONTACT_NUMBER = '0530084666';
+const CONTACT_NUMBER =
+  '0530084666';
 
 const OFFERS_CHANNEL =
   'https://whatsapp.com/channel/0029VbDA1BF2P59nFhzuhQ11';
 
-const DETAILS_REPLY = `أبشر وحياك الله 🌹
+const DETAILS_REPLY =
+`أبشر وحياك الله 🌹
 
 للتفاصيل والاستفسار تقدر تتواصل معنا على الرقم:
 ${CONTACT_NUMBER} 📞
@@ -27,18 +33,78 @@ ${OFFERS_CHANNEL} 🏠`;
 
 
 // =====================================================
+// تنظيف وتحويل الأرقام
+// =====================================================
+
+function convertArabicDigits(text = '') {
+
+  const arabicDigits = {
+    '٠': '0',
+    '١': '1',
+    '٢': '2',
+    '٣': '3',
+    '٤': '4',
+    '٥': '5',
+    '٦': '6',
+    '٧': '7',
+    '٨': '8',
+    '٩': '9',
+
+    '۰': '0',
+    '۱': '1',
+    '۲': '2',
+    '۳': '3',
+    '۴': '4',
+    '۵': '5',
+    '۶': '6',
+    '۷': '7',
+    '۸': '8',
+    '۹': '9',
+  };
+
+
+  return String(text).replace(
+    /[٠-٩۰-۹]/g,
+    (digit) =>
+      arabicDigits[digit] ||
+      digit
+  );
+}
+
+
+// =====================================================
 // تنظيف النص العربي
 // =====================================================
 
-function normalizeArabicText(text = '') {
-  return String(text)
+function normalizeArabicText(
+  text = ''
+) {
+
+  return convertArabicDigits(
+    String(text)
+  )
     .trim()
     .toLowerCase()
+
     .replace(/[أإآ]/g, 'ا')
+
     .replace(/ى/g, 'ي')
-    .replace(/[ًٌٍَُِّْ]/g, '')
-    .replace(/[؟?!.,،]/g, ' ')
-    .replace(/\s+/g, ' ')
+
+    .replace(
+      /[ًٌٍَُِّْ]/g,
+      ''
+    )
+
+    .replace(
+      /[؟?!.,،]/g,
+      ' '
+    )
+
+    .replace(
+      /\s+/g,
+      ' '
+    )
+
     .trim();
 }
 
@@ -47,20 +113,45 @@ function normalizeArabicText(text = '') {
 // طلب تفاصيل أكثر
 // =====================================================
 
-function customerAskedForMoreDetails(text = '') {
-  const normalized = normalizeArabicText(text);
+function customerAskedForMoreDetails(
+  text = ''
+) {
 
-  const triggerPhrases = [
+  const t =
+    normalizeArabicText(text);
+
+
+  const phrases = [
+
     'ممكن تفاصيل اكثر',
+
     'تفاصيل اكثر',
+
     'ابي تفاصيل اكثر',
+
     'ابغى تفاصيل اكثر',
+
     'اريد تفاصيل اكثر',
+
     'ودي بتفاصيل اكثر',
+
+    'more details',
+
+    'send me more details',
+
+    'i need more details',
+
+    'need more details',
   ];
 
-  return triggerPhrases.some((phrase) =>
-    normalized.includes(normalizeArabicText(phrase))
+
+  return phrases.some(
+    (phrase) =>
+      t.includes(
+        normalizeArabicText(
+          phrase
+        )
+      )
   );
 }
 
@@ -69,23 +160,51 @@ function customerAskedForMoreDetails(text = '') {
 // التمويل
 // =====================================================
 
-function customerAskedAboutFinance(text = '') {
-  const t = normalizeArabicText(text);
+function customerAskedAboutFinance(
+  text = ''
+) {
+
+  const t =
+    normalizeArabicText(text);
+
 
   const phrases = [
+
     'في تمويل',
+
     'فيه تمويل',
+
     'هل في تمويل',
+
     'هل فيه تمويل',
+
     'يقبل تمويل',
+
     'يقبل التمويل',
+
     'عن طريق البنك',
+
     'تمويل بنكي',
+
     'التمويل',
+
+    'finance',
+
+    'financing',
+
+    'bank finance',
+
+    'bank financing',
   ];
 
-  return phrases.some((phrase) =>
-    t.includes(normalizeArabicText(phrase))
+
+  return phrases.some(
+    (phrase) =>
+      t.includes(
+        normalizeArabicText(
+          phrase
+        )
+      )
   );
 }
 
@@ -94,23 +213,47 @@ function customerAskedAboutFinance(text = '') {
 // الرهن
 // =====================================================
 
-function customerAskedAboutMortgage(text = '') {
-  const t = normalizeArabicText(text);
+function customerAskedAboutMortgage(
+  text = ''
+) {
+
+  const t =
+    normalizeArabicText(text);
+
 
   const phrases = [
+
     'عليه رهن',
+
     'عليها رهن',
+
     'هل عليه رهن',
+
     'هل عليها رهن',
+
     'العقار مرهون',
+
     'مرهون',
+
     'مرهونة',
+
     'فيه رهن',
+
     'في رهن',
+
+    'mortgage',
+
+    'mortgaged',
   ];
 
-  return phrases.some((phrase) =>
-    t.includes(normalizeArabicText(phrase))
+
+  return phrases.some(
+    (phrase) =>
+      t.includes(
+        normalizeArabicText(
+          phrase
+        )
+      )
   );
 }
 
@@ -119,22 +262,51 @@ function customerAskedAboutMortgage(text = '') {
 // الإيجار
 // =====================================================
 
-function customerAskedAboutRent(text = '') {
-  const t = normalizeArabicText(text);
+function customerAskedAboutRent(
+  text = ''
+) {
+
+  const t =
+    normalizeArabicText(text);
+
 
   const phrases = [
+
     'في ايجار',
+
     'فيه ايجار',
+
     'عندكم ايجار',
+
     'عندكم للايجار',
+
     'ابي ايجار',
+
     'ابغى ايجار',
+
     'عقار للايجار',
+
     'عقارات للايجار',
+
+    'for rent',
+
+    'rent',
+
+    'rental',
+
+    'i want to rent',
+
+    'property for rent',
   ];
 
-  return phrases.some((phrase) =>
-    t.includes(normalizeArabicText(phrase))
+
+  return phrases.some(
+    (phrase) =>
+      t.includes(
+        normalizeArabicText(
+          phrase
+        )
+      )
   );
 }
 
@@ -143,246 +315,914 @@ function customerAskedAboutRent(text = '') {
 // اكتشاف طلب الوقوف / المعاينة
 // =====================================================
 
-function isViewingRequest(text = '') {
-  const t = normalizeArabicText(text);
+function isViewingRequest(
+  text = ''
+) {
+
+  const t =
+    normalizeArabicText(text);
+
 
   const phrases = [
+
     'اوقف على العقار',
+
     'اوقف عالعقار',
+
     'اوقف عليه',
+
     'اوقف عليها',
+
     'اوقف على الشقه',
+
     'اوقف على الشقة',
+
     'اوقف على الفيلا',
+
     'اوقف على العماره',
+
     'اوقف على العمارة',
 
     'ابي اوقف',
+
     'ابغى اوقف',
+
     'ودي اوقف',
+
     'محتاج اوقف',
+
     'احتاج اوقف',
+
     'عايز اوقف',
+
     'عاوز اوقف',
 
     'ابي اشوف العقار',
+
     'ابغى اشوف العقار',
+
     'محتاج اشوف العقار',
+
     'احتاج اشوف العقار',
+
     'عايز اشوف العقار',
+
     'اشوف العقار',
+
     'اشوفها',
+
     'اشوفه',
 
     'ابي اعاين',
+
     'ابغى اعاين',
+
     'محتاج اعاين',
+
     'احتاج اعاين',
+
     'عايز اعاين',
+
     'اعاين العقار',
+
     'اعاينها',
+
     'اعاينه',
+
     'معاينه',
+
     'معاينة',
+
     'موعد معاينه',
+
     'موعد معاينة',
 
     'احجز معاينه',
+
     'احجز معاينة',
+
     'احجز موعد',
+
     'ابي موعد',
+
     'ابغى موعد',
+
     'محتاج موعد',
+
     'احتاج موعد',
+
     'موعد للوقوف',
+
     'موعد للمعاينه',
+
     'موعد للمعاينة',
 
     'ابي ازور العقار',
+
     'ابغى ازور العقار',
+
     'محتاج ازور العقار',
+
     'احتاج ازور العقار',
+
     'زيارة العقار',
+
     'زياره العقار',
+
+    // English
+
+    'view the property',
+
+    'see the property',
+
+    'visit the property',
+
+    'property viewing',
+
+    'book a viewing',
+
+    'schedule a viewing',
+
+    'book an appointment',
+
+    'schedule an appointment',
+
+    'want to see it',
+
+    'want to view it',
+
+    'want to visit it',
+
+    'can i see it',
+
+    'can i view it',
   ];
 
-  return phrases.some((phrase) =>
-    t.includes(normalizeArabicText(phrase))
+
+  return phrases.some(
+    (phrase) =>
+      t.includes(
+        normalizeArabicText(
+          phrase
+        )
+      )
   );
 }
 
 
 // =====================================================
-// استخراج بيانات المعاينة من الرسالة الحالية
+// الأرقام المكتوبة بالكلمات
 // =====================================================
 
-function extractViewingData(history = [], userText = '') {
-  const raw = String(userText || '');
-  const text = normalizeArabicText(raw);
+function extractWrittenHour(
+  text = ''
+) {
 
-  let customerType = null;
+  const t =
+    normalizeArabicText(text);
 
-  if (
-    text.includes('مشتري') ||
-    text.includes('المشتري') ||
-    text.includes('انا شاري') ||
-    text.includes('شاري')
+
+  const hourWords = [
+
+    {
+      hour: 1,
+      words: [
+        'واحد',
+        'وحدة',
+        'الواحده',
+        'الواحدة',
+        'one',
+      ],
+    },
+
+    {
+      hour: 2,
+      words: [
+        'اثنين',
+        'اثنتين',
+        'الثانيه',
+        'الثانية',
+        'two',
+      ],
+    },
+
+    {
+      hour: 3,
+      words: [
+        'ثلاثه',
+        'ثلاثة',
+        'الثالثه',
+        'الثالثة',
+        'three',
+      ],
+    },
+
+    {
+      hour: 4,
+      words: [
+        'اربعه',
+        'اربعة',
+        'الرابعه',
+        'الرابعة',
+        'four',
+      ],
+    },
+
+    {
+      hour: 5,
+      words: [
+        'خمسه',
+        'خمسة',
+        'خامسه',
+        'خامسة',
+        'الخامسه',
+        'الخامسة',
+        'five',
+      ],
+    },
+
+    {
+      hour: 6,
+      words: [
+        'سته',
+        'ستة',
+        'السادسه',
+        'السادسة',
+        'six',
+      ],
+    },
+
+    {
+      hour: 7,
+      words: [
+        'سبعه',
+        'سبعة',
+        'السابعه',
+        'السابعة',
+        'seven',
+      ],
+    },
+
+    {
+      hour: 8,
+      words: [
+        'ثمانيه',
+        'ثمانية',
+        'الثامنه',
+        'الثامنة',
+        'eight',
+      ],
+    },
+
+    {
+      hour: 9,
+      words: [
+        'تسعه',
+        'تسعة',
+        'التاسعه',
+        'التاسعة',
+        'nine',
+      ],
+    },
+
+    {
+      hour: 10,
+      words: [
+        'عشره',
+        'عشرة',
+        'العاشره',
+        'العاشرة',
+        'ten',
+      ],
+    },
+
+    {
+      hour: 11,
+      words: [
+        'احد عشر',
+        'احدى عشر',
+        'الحاديه عشر',
+        'الحادية عشر',
+        'eleven',
+      ],
+    },
+
+    {
+      hour: 12,
+      words: [
+        'اثنا عشر',
+        'اثني عشر',
+        'الثانيه عشر',
+        'الثانية عشر',
+        'twelve',
+      ],
+    },
+  ];
+
+
+  for (
+    const item
+    of hourWords
   ) {
-    customerType = 'مشتري';
+
+    for (
+      const word
+      of item.words
+    ) {
+
+      if (
+        t.includes(
+          normalizeArabicText(
+            word
+          )
+        )
+      ) {
+
+        return String(
+          item.hour
+        );
+      }
+    }
   }
 
-  if (
-    text.includes('انا مكتب') ||
-    text.includes('مكتب عقار') ||
-    text.includes('مكتب عقاري') ||
-    text.includes('وسيط') ||
-    text.includes('مسوق عقاري')
+
+  return null;
+}
+
+
+// =====================================================
+// استخراج الساعة
+// =====================================================
+
+function extractViewingTime(
+  text = ''
+) {
+
+  const raw =
+    convertArabicDigits(
+      String(text || '')
+    );
+
+
+  const normalized =
+    normalizeArabicText(
+      raw
+    );
+
+
+  // -----------------------------------------------
+  // الساعة 5
+  // الساعة 5:30
+  // الساعة 5 مساء
+  // at 5
+  // at 5 pm
+  // -----------------------------------------------
+
+  const explicitPatterns = [
+
+    /(?:الساعة|الساعه)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباح|مساء|العصر|الظهر|المغرب|الليل|م|ص)?/i,
+
+    /\bat\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i,
+
+    /\b(\d{1,2}):(\d{2})\s*(am|pm|صباحا|صباح|مساء|العصر|الظهر|المغرب|الليل|م|ص)?\b/i,
+  ];
+
+
+  for (
+    const pattern
+    of explicitPatterns
   ) {
-    customerType = 'مكتب';
+
+    const match =
+      raw.match(pattern);
+
+
+    if (match) {
+
+      return match[0].trim();
+    }
   }
 
 
-  let day = null;
+  // -----------------------------------------------
+  // الخامسة
+  // خمسة
+  // five
+  // الساعة الخامسة
+  // -----------------------------------------------
 
-  const days = [
+  const writtenHour =
+    extractWrittenHour(
+      normalized
+    );
+
+
+  if (writtenHour) {
+
+    let suffix = '';
+
+
+    if (
+      normalized.includes(
+        'مساء'
+      ) ||
+      normalized.includes(
+        'pm'
+      )
+    ) {
+
+      suffix = ' مساء';
+    }
+
+
+    else if (
+      normalized.includes(
+        'صباح'
+      ) ||
+      normalized.includes(
+        'am'
+      )
+    ) {
+
+      suffix = ' صباح';
+    }
+
+
+    else if (
+      normalized.includes(
+        'العصر'
+      )
+    ) {
+
+      suffix = ' العصر';
+    }
+
+
+    else if (
+      normalized.includes(
+        'الظهر'
+      )
+    ) {
+
+      suffix = ' الظهر';
+    }
+
+
+    else if (
+      normalized.includes(
+        'المغرب'
+      )
+    ) {
+
+      suffix = ' المغرب';
+    }
+
+
+    else if (
+      normalized.includes(
+        'الليل'
+      )
+    ) {
+
+      suffix = ' الليل';
+    }
+
+
+    return `${writtenHour}${suffix}`;
+  }
+
+
+  // -----------------------------------------------
+  // لو البوت سأل عن الساعة
+  // والعميل رد فقط:
+  //
+  // 5
+  // ٥
+  // -----------------------------------------------
+
+  const onlyNumber =
+    normalized.match(
+      /^(\d{1,2})(?:\s*(am|pm|م|ص|مساء|صباح))?$/
+    );
+
+
+  if (onlyNumber) {
+
+    const hour =
+      Number(
+        onlyNumber[1]
+      );
+
+
+    if (
+      hour >= 1 &&
+      hour <= 24
+    ) {
+
+      return normalized;
+    }
+  }
+
+
+  return null;
+}
+
+
+// =====================================================
+// استخراج بيانات المعاينة
+// =====================================================
+
+function extractViewingData(
+  history = [],
+  userText = ''
+) {
+
+  // مهم:
+  // البيانات الجديدة تُقرأ من الرسالة الحالية فقط.
+  //
+  // server.js هو الذي يحتفظ بما قاله العميل
+  // في الرسائل السابقة داخل viewing_sessions.
+
+  const raw =
+    String(
+      userText || ''
+    );
+
+
+  const text =
+    normalizeArabicText(
+      raw
+    );
+
+
+  let customerType =
+    null;
+
+
+  // -----------------------------------------------
+  // مشتري
+  // -----------------------------------------------
+
+  const buyerPhrases = [
+
+    'انا المشتري',
+
+    'مشتري',
+
+    'المشتري',
+
+    'مشتري مباشر',
+
+    'انا شاري',
+
+    'شاري',
+
+    'buyer',
+
+    'i am the buyer',
+
+    "i'm the buyer",
+
+    'direct buyer',
+  ];
+
+
+  if (
+    buyerPhrases.some(
+      (phrase) =>
+        text.includes(
+          normalizeArabicText(
+            phrase
+          )
+        )
+    )
+  ) {
+
+    customerType =
+      'مشتري';
+  }
+
+
+  // -----------------------------------------------
+  // مكتب / وسيط
+  // -----------------------------------------------
+
+  const officePhrases = [
+
+    'انا مكتب',
+
+    'مكتب عقار',
+
+    'مكتب عقاري',
+
+    'وسيط',
+
+    'مسوق عقاري',
+
+    'real estate office',
+
+    'real estate agent',
+
+    'broker',
+
+    'agent',
+
+    'i am an agent',
+
+    "i'm an agent",
+  ];
+
+
+  if (
+    officePhrases.some(
+      (phrase) =>
+        text.includes(
+          normalizeArabicText(
+            phrase
+          )
+        )
+    )
+  ) {
+
+    customerType =
+      'مكتب';
+  }
+
+
+  // -----------------------------------------------
+  // اليوم
+  // -----------------------------------------------
+
+  let day =
+    null;
+
+
+  const dayPatterns = [
+
     'اليوم',
+
     'بكره',
+
     'بكرة',
+
     'غدا',
+
     'غداً',
 
     'السبت',
 
     'الاحد',
+
     'الأحد',
 
     'الاثنين',
+
     'الإثنين',
 
     'الثلاثاء',
+
     'الثلاثا',
 
     'الاربعاء',
+
     'الأربعاء',
+
     'الاربع',
+
     'الأربع',
 
     'الخميس',
 
     'الجمعه',
+
     'الجمعة',
+
+    // English
+
+    'today',
+
+    'tomorrow',
+
+    'saturday',
+
+    'sunday',
+
+    'monday',
+
+    'tuesday',
+
+    'wednesday',
+
+    'thursday',
+
+    'friday',
   ];
 
-  for (const d of days) {
+
+  for (
+    const d
+    of dayPatterns
+  ) {
+
     if (
       text.includes(
-        normalizeArabicText(d)
+        normalizeArabicText(
+          d
+        )
       )
     ) {
+
       day = d;
+
       break;
     }
   }
 
 
-  const dateMatch = raw.match(
-    /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/
-  );
+  // -----------------------------------------------
+  // تاريخ رقمي
+  // 26/9
+  // 26-9
+  // 26/09/2026
+  // -----------------------------------------------
 
-  if (!day && dateMatch) {
-    day = dateMatch[0];
+  const convertedRaw =
+    convertArabicDigits(
+      raw
+    );
+
+
+  const dateMatch =
+    convertedRaw.match(
+      /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/
+    );
+
+
+  if (
+    !day &&
+    dateMatch
+  ) {
+
+    day =
+      dateMatch[0];
   }
 
 
-  let time = null;
+  // -----------------------------------------------
+  // الساعة
+  // -----------------------------------------------
 
-  const patterns = [
-    /(?:الساعة|الساعه)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
-
-    /\b(\d{1,2}):(\d{2})\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?\b/i,
-
-    /(?:الوقت|وقت)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-
-    if (m) {
-      time = m[0];
-      break;
-    }
-  }
+  const time =
+    extractViewingTime(
+      raw
+    );
 
 
   return {
+
     day,
+
     time,
+
     customerType,
   };
 }
 
 
 // =====================================================
-// المعاينة لا تستمر من history
-// server.js هو المسؤول عن حفظ حالة المعاينة
+// هل المعاينة فعالة؟
 // =====================================================
 
 function viewingFlowIsActive(
   history = [],
   userText = ''
 ) {
-  return isViewingRequest(userText);
+
+  // لا نعتمد على history هنا.
+  //
+  // منعًا لمشكلة:
+  // العميل يكمل المعاينة
+  // ثم يقول "السلام عليكم"
+  // فيرجع البوت يفتح الموعد القديم.
+
+  return isViewingRequest(
+    userText
+  );
 }
 
 
 // =====================================================
-// معرفة العقار الحالي
-// نبدأ من أحدث رسالة حتى لا نرجع لعقار قديم
+// تحديد العقار الحالي
 // =====================================================
 
 function detectCurrentProperty(
   history = [],
   userText = ''
 ) {
+
   const messages = [
+
     ...history.map(
-      (m) => m.content || ''
+      (message) =>
+        message.content || ''
     ),
+
     userText,
   ];
 
+
+  // نبدأ من أحدث رسالة
+  // وليس من أقدم رسالة.
+
   for (
-    let i = messages.length - 1;
+    let i =
+      messages.length - 1;
+
     i >= 0;
+
     i--
   ) {
+
     const t =
       normalizeArabicText(
         messages[i]
       );
 
 
+    // -----------------------------------------------
+    // الخالدية
+    // -----------------------------------------------
+
     if (
-      t.includes('الخالدية') ||
-      t.includes('عمارة الخالدية')
+      t.includes(
+        'الخالدية'
+      ) ||
+
+      t.includes(
+        'عمارة الخالدية'
+      ) ||
+
+      t.includes(
+        'khalidiyah'
+      ) ||
+
+      t.includes(
+        'khalidiya'
+      )
     ) {
+
       return 'عمارة الخالدية الاستثمارية';
     }
 
 
+    // -----------------------------------------------
+    // شوران
+    // -----------------------------------------------
+
     if (
-      t.includes('شوران') ||
-      t.includes('شقة شوران') ||
-      t.includes('شقه شوران')
+      t.includes(
+        'شوران'
+      ) ||
+
+      t.includes(
+        'شقة شوران'
+      ) ||
+
+      t.includes(
+        'شقه شوران'
+      ) ||
+
+      t.includes(
+        'shuran'
+      )
     ) {
+
       return 'شقة شوران';
     }
 
 
+    // -----------------------------------------------
+    // المطار
+    // -----------------------------------------------
+
     if (
-      t.includes('حي المطار') ||
-      t.includes('فيلا المطار')
+      t.includes(
+        'حي المطار'
+      ) ||
+
+      t.includes(
+        'فيلا المطار'
+      ) ||
+
+      t.includes(
+        'airport villa'
+      ) ||
+
+      t.includes(
+        'al matar'
+      )
     ) {
+
       return 'فيلا حي المطار';
     }
   }
@@ -393,7 +1233,7 @@ function detectCurrentProperty(
 
 
 // =====================================================
-// عروض مكتب سدّين
+// عروض سدّين
 // =====================================================
 
 const SADIN_OFFERS = `
@@ -643,17 +1483,25 @@ const SADIN_OFFERS = `
 
 
 // =====================================================
-// تعليمات المساعد
+// تعليمات Claude
 // =====================================================
 
 const EXTRACTION_SYSTEM_PROMPT = `
 أنت موظف مبيعات عقاري سعودي محترف تابع لمكتب سدّين للعقار في المدينة المنورة.
 
-تكلم باللهجة السعودية الطبيعية فقط.
+مهم جدًا:
 
-استخدم أسلوبًا ودودًا ومحترمًا وطبيعيًا.
+العميل قد يرسل رسالة مكتوبة مباشرة أو قد تكون الرسالة نصًا تم تحويله تلقائيًا من تسجيل صوتي.
 
-ممنوع استخدام اللهجة المصرية.
+تعامل مع النص المحول من التسجيل الصوتي مثل أي رسالة عادية.
+
+افهم العربية والإنجليزية.
+
+إذا تكلم العميل بالإنجليزية افهم طلبه بشكل طبيعي.
+
+الرد النهائي للعميل يكون باللهجة السعودية الطبيعية ما لم يكن من الواضح جدًا أن العميل لا يفهم العربية، وفي هذه الحالة يمكن الرد بالإنجليزية.
+
+لا تستخدم اللهجة المصرية في ردود العملاء.
 
 =====================================================
 
@@ -663,11 +1511,11 @@ ${SADIN_OFFERS}
 
 =====================================================
 
-مهم جدًا:
+قواعد مهمة:
 
 حافظ على سياق العقار الحالي.
 
-إذا كان العميل يتحدث عن عقار معين ثم سأل سؤالًا مثل:
+إذا كان العميل يتحدث عن عقار معين ثم سأل:
 
 كم مساحته؟
 كم سعره؟
@@ -680,21 +1528,11 @@ ${SADIN_OFFERS}
 
 جاوب عن السؤال المطلوب فقط.
 
-لا تعيد كل تفاصيل العقار إلا إذا طلب العميل جميع التفاصيل.
-
-مثال:
-
-العميل:
-كم مساحة شقة شوران؟
-
-الرد:
-مساحتها 130.32م².
-
-لا تضف السعر والغرف وبقية المعلومات من نفسك.
+لا تعيد جميع التفاصيل بدون طلب.
 
 =====================================================
 
-إذا سأل عن كل التفاصيل مثل:
+إذا قال:
 
 عطني كل التفاصيل
 وش تفاصيل العقار؟
@@ -719,14 +1557,9 @@ ${SADIN_OFFERS}
 
 التمويل:
 
-تم تأكيد أن التمويل متوفر.
+التمويل متوفر.
 
-إذا سأل العميل:
-
-فيه تمويل؟
-هل يوجد تمويل؟
-يقبل تمويل؟
-تمويل بنكي؟
+إذا سأل العميل عنه:
 
 قل باختصار:
 
@@ -736,9 +1569,9 @@ ${SADIN_OFFERS}
 
 الرهن:
 
-تم تأكيد أن العقارات ليست عليها رهن.
+العقارات ليست عليها رهن حسب المعلومات المتوفرة.
 
-إذا سأل العميل:
+إذا سأل:
 
 هل العقار عليه رهن؟
 مرهون؟
@@ -752,13 +1585,13 @@ ${SADIN_OFFERS}
 
 الإيجار:
 
-إذا العميل يبحث عن إيجار أو يسأل هل يوجد إيجار:
+إذا العميل يبحث عن إيجار:
 
-قل له:
+قل:
 
 "أيوه موجود، وفيه معارض ومكاتب وعماير، وإن شاء الله أرسل لك المتوفر الآن 🌹"
 
-لا تخترع عروض إيجار غير موجودة في البيانات.
+لا تخترع عرض إيجار غير موجود.
 
 =====================================================
 
@@ -770,11 +1603,15 @@ ${SADIN_OFFERS}
 السعر مرتفع
 يمدي نتفاهم؟
 
-يمكنك القول:
+يمكن القول:
 
 "أتفهمك 👍 وممكن يكون فيه مجال للنقاش حسب الجدية."
 
-ممنوع اختراع خصم أو سعر جديد أو موافقة المالك.
+لا تخترع خصمًا.
+
+لا تخترع سعرًا جديدًا.
+
+لا تدعي أن المالك وافق.
 
 إذا قال:
 
@@ -788,58 +1625,105 @@ ${SADIN_OFFERS}
 
 عمارة الخالدية:
 
-إذا سأل عنها مباشرة، لا تسأله عن احتياجه أولًا.
-
-اعرضها مباشرة.
+إذا سأل عنها مباشرة:
+لا تسأله عن احتياجه أولًا.
 
 هي عمارة استثمارية في حي الخالدية بالمدينة المنورة.
-المساحة 486م².
-4 أدوار.
-السعر 2.4 مليون ريال صافي.
-14 وحدة ومساحة مستقلة.
+
+المساحة:
+486م².
+
+عدد الأدوار:
+4.
+
+السعر:
+2.4 مليون ريال صافي.
+
+إجمالي الوحدات والمساحات المستقلة:
+14.
+
 5 شقق.
+
 7 استوديوهات.
+
 ملحق خارجي.
+
 غرفة سائق.
+
 مؤجرة بالكامل.
-مفروشة وجاهزة للتأجير اليومي.
+
+مفروشة.
+
+جاهزة للتأجير اليومي.
 
 ممنوع ذكر رقم للدخل السنوي.
+
+إذا سأل عن الدخل السنوي:
+
+"قيمة الدخل السنوي المحدثة مو متوفرة عندي بشكل مؤكد حاليًا."
 
 =====================================================
 
 شقة شوران:
 
 شقة تمليك جديدة.
+
 حي شوران.
+
 4 غرف.
+
 130.32م².
+
 530 ألف ريال.
+
 واجهة شمالية.
-المشروع شوران 10 / 3714.
-شارع إسماعيل بن زكريا.
-رقم المخطط 634 / ت / 1413.
-الرقم المرجعي 399486.
-رخصة الإعلان 7201065492.
+
+المشروع:
+شوران 10 / 3714.
+
+الشارع:
+إسماعيل بن زكريا.
+
+رقم المخطط:
+634 / ت / 1413.
+
+الرقم المرجعي:
+399486.
+
+رخصة الإعلان:
+7201065492.
 
 =====================================================
 
 فيلا المطار:
 
-فيلا في حي المطار.
+حي المطار.
+
 6 غرف.
+
 225.81م².
+
 870 ألف ريال.
+
 عمرها سنتان.
+
 واجهة جنوبية غربية.
+
 شارع بعرض 30 متر.
-اسم الشارع محمد بن إبراهيم اليشكري.
-الرقم المرجعي 676299.
-رخصة الإعلان 7201080724.
+
+اسم الشارع:
+محمد بن إبراهيم اليشكري.
+
+الرقم المرجعي:
+676299.
+
+رخصة الإعلان:
+7201080724.
 
 =====================================================
 
-إذا العميل غيّر العقار، انتقل للعقار الجديد.
+إذا العميل غيّر العقار:
+انتقل للعقار الجديد.
 
 إذا قال:
 
@@ -859,7 +1743,7 @@ ${SADIN_OFFERS}
 قناة واتساب.
 أي رابط تواصل.
 
-الكود الخارجي هو المسؤول عن إرسال بيانات التواصل.
+الكود الخارجي هو المسؤول عن بيانات التواصل.
 
 =====================================================
 
@@ -877,6 +1761,14 @@ ${SADIN_OFFERS}
 
 =====================================================
 
+إذا كانت الرسالة ناتجة عن تسجيل صوتي وفيها أخطاء بسيطة ناتجة عن تحويل الصوت إلى نص:
+
+حاول فهم المقصود من السياق.
+
+لكن لا تخترع معلومات عن العقار.
+
+=====================================================
+
 يفضل أن ترجع JSON صالح بالشكل التالي:
 
 {
@@ -890,20 +1782,23 @@ ${SADIN_OFFERS}
   "ready_to_search": false
 }
 
-إذا رجعت نصًا عاديًا بدل JSON، سيتم استخدام النص نفسه.
+إذا رجعت نصًا عاديًا بدل JSON:
+سيتم استخدام النص نفسه.
 
 استخدم ready_to_search=true فقط إذا كان العميل يبحث عن عقار غير موجود ضمن عروض سدّين وعندك معلومات كافية للبحث.
 `;
 
 
 // =====================================================
-// الرد من قاعدة البيانات
+// تعليمات الرد المبني على البحث
 // =====================================================
 
 const GROUNDED_REPLY_SYSTEM_PROMPT = `
 أنت موظف مبيعات عقاري سعودي تابع لمكتب سدّين للعقار.
 
-تكلم باللهجة السعودية الطبيعية.
+افهم العربية والإنجليزية.
+
+تكلم باللهجة السعودية الطبيعية في الرد العربي.
 
 اعتمد فقط على نتائج البحث الموجودة أمامك.
 
@@ -914,14 +1809,16 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 حافظ على سياق العقار.
 
 إذا سأل عن تفصيلة واحدة:
-جاوب عن هذه التفصيلة فقط.
+جاوب عنها فقط.
 
-إذا معلومة غير موجودة:
+إذا المعلومة غير موجودة:
+
 قل:
 
 "المعلومة هذي مو متوفرة عندي حاليًا."
 
 ممنوع إرسال:
+
 رقم هاتف.
 قناة واتساب.
 رابط تواصل.
@@ -933,7 +1830,7 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 
 
 // =====================================================
-// الاتصال بـ Claude
+// Claude API
 // =====================================================
 
 async function callClaude(
@@ -941,41 +1838,55 @@ async function callClaude(
   messages,
   maxTokens = 1200
 ) {
+
   try {
-    const res = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: MODEL,
-        max_tokens: maxTokens,
-        system,
-        messages,
-      },
-      {
-        headers: {
-          'Content-Type':
-            'application/json',
 
-          'x-api-key':
-            ANTHROPIC_API_KEY,
+    const response =
+      await axios.post(
 
-          'anthropic-version':
-            '2023-06-01',
+        'https://api.anthropic.com/v1/messages',
+
+        {
+          model:
+            MODEL,
+
+          max_tokens:
+            maxTokens,
+
+          system,
+
+          messages,
         },
 
-        timeout: 30000,
-      }
-    );
+        {
+          headers: {
+
+            'Content-Type':
+              'application/json',
+
+            'x-api-key':
+              ANTHROPIC_API_KEY,
+
+            'anthropic-version':
+              '2023-06-01',
+          },
+
+          timeout:
+            30000,
+        }
+      );
 
 
-    return res.data.content
+    return response.data.content
       .map(
-        (b) =>
-          b.text || ''
+        (block) =>
+          block.text || ''
       )
       .join('')
       .trim();
 
   } catch (err) {
+
     console.error(
       'تفاصيل خطأ Claude API:',
       JSON.stringify(
@@ -986,43 +1897,56 @@ async function callClaude(
       )
     );
 
+
     return null;
   }
 }
 
 
 // =====================================================
-// قراءة JSON
+// قراءة JSON من Claude
 // =====================================================
 
 function tryParseClaudeResponse(
   rawText
 ) {
+
   if (
     !rawText ||
     typeof rawText !== 'string'
   ) {
+
     return null;
   }
 
 
   let cleaned =
     rawText
-      .replace(/```json/gi, '')
-      .replace(/```/g, '')
+      .replace(
+        /```json/gi,
+        ''
+      )
+      .replace(
+        /```/g,
+        ''
+      )
       .trim();
 
 
   try {
-    return JSON.parse(cleaned);
 
-  } catch (e) {
+    return JSON.parse(
+      cleaned
+    );
+
+  } catch (_) {
     // نكمل
   }
 
 
   const firstBrace =
     cleaned.indexOf('{');
+
 
   const lastBrace =
     cleaned.lastIndexOf('}');
@@ -1031,20 +1955,24 @@ function tryParseClaudeResponse(
   if (
     firstBrace !== -1 &&
     lastBrace !== -1 &&
-    lastBrace > firstBrace
+    lastBrace >
+      firstBrace
   ) {
+
     const possibleJson =
       cleaned.slice(
         firstBrace,
         lastBrace + 1
       );
 
+
     try {
+
       return JSON.parse(
         possibleJson
       );
 
-    } catch (e) {
+    } catch (_) {
       // نص عادي
     }
   }
@@ -1055,19 +1983,117 @@ function tryParseClaudeResponse(
 
 
 // =====================================================
-// إنشاء الرد
+// الرد على Sticker
+// =====================================================
+
+async function generateStickerReply(
+  stickerDescription = ''
+) {
+
+  const description =
+    String(
+      stickerDescription || ''
+    ).trim();
+
+
+  if (!description) {
+
+    return '😂🌹';
+  }
+
+
+  const system = `
+أنت موظف واتساب سعودي تابع لمكتب سدّين للعقار.
+
+العميل أرسل Sticker على واتساب.
+
+سيتم إعطاؤك وصفًا لمحتوى الاستيكر.
+
+رد برسالة نصية قصيرة جدًا وطبيعية ومناسبة لمعنى الاستيكر.
+
+مهم:
+
+لا تقل:
+"الاستيكر يظهر"
+أو:
+"الصورة تحتوي"
+
+لا تشرح الصورة للعميل.
+
+تصرف كأنك رأيت الاستيكر بنفسك.
+
+إذا كان الاستيكر ضحك:
+يمكن الرد بشكل لطيف.
+
+إذا كان تحية:
+رد التحية.
+
+إذا كان شكر:
+رد بالشكر.
+
+إذا كان إعجاب أو موافقة:
+رد طبيعي.
+
+إذا لم يكن المعنى واضحًا:
+استخدم ردًا قصيرًا ومحايدًا.
+
+تكلم باللهجة السعودية الطبيعية.
+
+لا تحول المحادثة إلى بيع عقاري بدون سبب.
+
+لا ترسل رقم هاتف أو روابط.
+
+أرسل الرد فقط.
+`;
+
+
+  const result =
+    await callClaude(
+      system,
+
+      [
+        {
+          role:
+            'user',
+
+          content:
+`وصف الاستيكر:
+${description}`,
+        },
+      ],
+
+      150
+    );
+
+
+  if (!result) {
+
+    return '😂🌹';
+  }
+
+
+  return result.trim();
+}
+
+
+// =====================================================
+// إنشاء الرد الأساسي
 // =====================================================
 
 async function generateReply(
   history,
   userText
 ) {
+
   try {
 
     // =================================================
-    // مهم:
-    // المعاينة لم تعد تتم هنا
-    // server.js مسؤول عنها بالكامل
+    // ملاحظة:
+    //
+    // المعاينة لا تتم هنا.
+    //
+    // server.js يدير حالة المعاينة
+    // ويحفظها في PostgreSQL.
     // =================================================
 
 
@@ -1080,6 +2106,7 @@ async function generateReply(
         userText
       )
     ) {
+
       return 'نعم، فيه تمويل 👍';
     }
 
@@ -1093,6 +2120,7 @@ async function generateReply(
         userText
       )
     ) {
+
       return 'لا، العقار ليس عليه رهن أبدًا.';
     }
 
@@ -1106,6 +2134,7 @@ async function generateReply(
         userText
       )
     ) {
+
       return 'أيوه موجود، وفيه معارض ومكاتب وعماير، وإن شاء الله أرسل لك المتوفر الآن 🌹';
     }
 
@@ -1119,27 +2148,37 @@ async function generateReply(
         userText
       )
     ) {
+
       console.log(
         'العميل طلب تفاصيل أكثر - إرسال بيانات التواصل'
       );
+
 
       return DETAILS_REPLY;
     }
 
 
     // =================================================
-    // إرسال المحادثة لـ Claude
+    // تجهيز المحادثة
     // =================================================
 
     const messages = [
+
       ...history,
 
       {
-        role: 'user',
-        content: userText,
+        role:
+          'user',
+
+        content:
+          userText,
       },
     ];
 
+
+    // =================================================
+    // Claude
+    // =================================================
 
     const rawExtraction =
       await callClaude(
@@ -1149,9 +2188,11 @@ async function generateReply(
 
 
     if (!rawExtraction) {
+
       console.error(
         'Claude لم يرجع أي محتوى'
       );
+
 
       return 'ياهلا فيك 🌹 ممكن تعيد رسالتك مرة ثانية؟';
     }
@@ -1163,24 +2204,39 @@ async function generateReply(
       );
 
 
+    // =================================================
+    // Claude رجع نص عادي
+    // =================================================
+
     if (!parsed) {
+
       console.log(
-        'Claude رجع نص عادي - سيتم إرساله مباشرة للعميل'
+        'Claude رجع نص عادي'
       );
+
 
       return rawExtraction.trim();
     }
 
 
+    // =================================================
+    // لا يحتاج بحث خارجي
+    // =================================================
+
     if (
-      parsed.ready_to_search !== true
+      parsed.ready_to_search !==
+      true
     ) {
+
       if (
         parsed.reply &&
+
         typeof parsed.reply ===
           'string' &&
+
         parsed.reply.trim()
       ) {
+
         return parsed.reply.trim();
       }
 
@@ -1189,20 +2245,34 @@ async function generateReply(
     }
 
 
+    // =================================================
+    // تجهيز معايير البحث
+    // =================================================
+
     const criteria =
       parsed.criteria &&
+
       typeof parsed.criteria ===
         'object'
+
         ? parsed.criteria
+
         : {};
 
 
-    let matches = [];
+    let matches =
+      [];
 
+
+    // =================================================
+    // البحث في الفهرس
+    // =================================================
 
     try {
+
       matches =
         searchProperties({
+
           city:
             criteria.city ||
             null,
@@ -1221,9 +2291,13 @@ async function generateReply(
 
           limit:
             5,
+
         }) || [];
 
-    } catch (searchError) {
+    } catch (
+      searchError
+    ) {
+
       console.error(
         'خطأ أثناء البحث:',
         searchError
@@ -1234,58 +2308,79 @@ async function generateReply(
     }
 
 
+    // =================================================
+    // نتائج البحث
+    // =================================================
+
     const resultsContext =
       matches.length
-        ? `نتائج البحث المتاحة فعليًا:\n${matches
-            .map(
-              (m) => {
 
-                const title =
-                  m.title ||
-                  m.property_type ||
-                  'عقار';
+        ? `نتائج البحث المتاحة فعليًا:
+${matches
+  .map(
+    (property) => {
 
-
-                const location =
-                  `${m.city || ''} ${m.district || ''}`.trim();
+      const title =
+        property.title ||
+        property.property_type ||
+        'عقار';
 
 
-                const area =
-                  m.area_sqm
-                    ? `${m.area_sqm} م²`
-                    : 'المساحة غير مذكورة';
+      const location =
+        `${property.city || ''} ${property.district || ''}`
+          .trim();
 
 
-                const url =
-                  m.url ||
-                  'لا يوجد رابط';
+      const area =
+        property.area_sqm
+
+          ? `${property.area_sqm} م²`
+
+          : 'المساحة غير مذكورة';
 
 
-                return `- ${title} في ${location} — ${area} — ${url}`;
-              }
-            )
-            .join('\n')}`
+      const url =
+        property.url ||
+        'لا يوجد رابط';
+
+
+      return `- ${title} في ${location} — ${area} — ${url}`;
+    }
+  )
+  .join('\n')}`
 
         : 'لا توجد نتائج مطابقة حاليًا في الفهرس.';
 
 
+    // =================================================
+    // الرد المبني على النتائج
+    // =================================================
+
     const groundedMessages = [
+
       ...messages,
 
       {
-        role: 'assistant',
-        content: rawExtraction,
+        role:
+          'assistant',
+
+        content:
+          rawExtraction,
       },
 
       {
-        role: 'user',
+        role:
+          'user',
 
         content:
 `[نتائج البحث الداخلية]
+
 ${resultsContext}
 
 اكتب الرد النهائي للعميل بناءً على النتائج فقط.
+
 حافظ على سياق العقار الذي يتحدث عنه العميل.
+
 إذا سأل عن تفصيلة واحدة جاوب عنها فقط.`,
       },
     ];
@@ -1300,18 +2395,21 @@ ${resultsContext}
 
     if (
       !finalReply ||
+
       typeof finalReply !==
         'string' ||
+
       !finalReply.trim()
     ) {
+
       return 'ما قدرت أوصل للنتيجة حاليًا 🌹 جرب مرة ثانية بعد شوي.';
     }
 
 
     return finalReply.trim();
 
-
   } catch (err) {
+
     console.error(
       'خطأ غير متوقع في generateReply:',
       err
@@ -1328,8 +2426,18 @@ ${resultsContext}
 // =====================================================
 
 module.exports = {
+
   generateReply,
+
+  generateStickerReply,
+
   isViewingRequest,
+
   extractViewingData,
+
   detectCurrentProperty,
+
+  normalizeArabicText,
+
+  convertArabicDigits,
 };
