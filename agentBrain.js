@@ -147,23 +147,81 @@ function isViewingRequest(text = '') {
   const t = normalizeArabicText(text);
 
   const phrases = [
-    'ابغى اوقف على العقار',
-    'ابي اوقف على العقار',
-    'ابغى اوقف عالعقار',
-    'ابي اوقف عالعقار',
-    'ودي اوقف على العقار',
-    'ابغى اشوف العقار',
+    // الوقوف
+    'اوقف على العقار',
+    'اوقف عالعقار',
+    'اوقف عليه',
+    'اوقف عليها',
+    'اوقف على هذا',
+    'اوقف على هذي',
+    'اوقف على الشقه',
+    'اوقف على الشقة',
+    'اوقف على الفيلا',
+    'اوقف على العماره',
+    'اوقف على العمارة',
+
+    // أبي / أبغى
+    'ابي اوقف',
+    'ابغى اوقف',
+    'ودي اوقف',
+
+    // محتاج / احتاج
+    'محتاج اوقف',
+    'احتاج اوقف',
+    'احتاج اني اوقف',
+
+    // صيغ مصرية محتملة من العميل
+    'عايز اوقف',
+    'عاوز اوقف',
+
+    // مشاهدة العقار
     'ابي اشوف العقار',
-    'ابغى اعاين العقار',
-    'ابي اعاين العقار',
-    'معاينة العقار',
+    'ابغى اشوف العقار',
+    'ودي اشوف العقار',
+    'محتاج اشوف العقار',
+    'احتاج اشوف العقار',
+    'عايز اشوف العقار',
+    'عاوز اشوف العقار',
+    'اشوف العقار',
+    'اشوفها',
+    'اشوفه',
+
+    // المعاينة
+    'ابي اعاين',
+    'ابغى اعاين',
+    'ودي اعاين',
+    'محتاج اعاين',
+    'احتاج اعاين',
+    'عايز اعاين',
+    'عاوز اعاين',
+    'اعاين العقار',
+    'اعاينها',
+    'اعاينه',
+    'معاينه',
+    'معاينة',
+    'موعد معاينه',
     'موعد معاينة',
+
+    // الحجز
+    'احجز معاينه',
     'احجز معاينة',
     'احجز موعد',
-    'ابغى موعد',
     'ابي موعد',
-    'اوقف على هذا العقار',
-    'اوقف على العقار',
+    'ابغى موعد',
+    'محتاج موعد',
+    'احتاج موعد',
+    'موعد للوقوف',
+    'موعد للمعاينه',
+    'موعد للمعاينة',
+
+    // الزيارة
+    'ابي ازور العقار',
+    'ابغى ازور العقار',
+    'محتاج ازور العقار',
+    'احتاج ازور العقار',
+    'عايز ازور العقار',
+    'زيارة العقار',
+    'زياره العقار',
   ];
 
   return phrases.some((phrase) =>
@@ -193,7 +251,10 @@ function extractViewingData(history = [], userText = '') {
   if (
     text.includes('انا المشتري') ||
     text.includes('مشتري') ||
-    text.includes('المشتري')
+    text.includes('المشتري') ||
+    text.includes('مشتري مباشر') ||
+    text.includes('انا شاري') ||
+    text.includes('شاري')
   ) {
     customerType = 'مشتري';
   }
@@ -202,10 +263,16 @@ function extractViewingData(history = [], userText = '') {
     text.includes('انا مكتب') ||
     text.includes('مكتب عقار') ||
     text.includes('مكتب عقاري') ||
-    text.includes('وسيط')
+    text.includes('وسيط') ||
+    text.includes('مسوق عقاري')
   ) {
     customerType = 'مكتب';
   }
+
+
+  // ===================================================
+  // اليوم
+  // ===================================================
 
   let day = null;
 
@@ -214,21 +281,36 @@ function extractViewingData(history = [], userText = '') {
     'بكره',
     'بكرة',
     'غدا',
+    'غداً',
+
     'السبت',
+
     'الاحد',
     'الأحد',
+
     'الاثنين',
     'الإثنين',
+
     'الثلاثاء',
+    'الثلاثا',
+
     'الاربعاء',
     'الأربعاء',
+    'الاربع',
+    'الأربع',
+
     'الخميس',
+
     'الجمعه',
     'الجمعة',
   ];
 
   for (const d of dayPatterns) {
-    if (allMessages.includes(d)) {
+    if (
+      normalizeArabicText(allMessages).includes(
+        normalizeArabicText(d)
+      )
+    ) {
       day = d;
       break;
     }
@@ -242,11 +324,19 @@ function extractViewingData(history = [], userText = '') {
     day = dateMatch[0];
   }
 
+
+  // ===================================================
+  // الساعة
+  // ===================================================
+
   let time = null;
 
   const timePatterns = [
-    /(?:الساعة|الساعه)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|م|ص)?/i,
-    /\b(\d{1,2}):(\d{2})\s*(صباحا|صباحًا|صباح|مساء|مساءً|م|ص)?\b/i,
+    /(?:الساعة|الساعه)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
+
+    /\b(\d{1,2}):(\d{2})\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?\b/i,
+
+    /(?:الوقت|وقت)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
   ];
 
   for (const pattern of timePatterns) {
@@ -258,6 +348,7 @@ function extractViewingData(history = [], userText = '') {
     }
   }
 
+
   return {
     day,
     time,
@@ -267,62 +358,94 @@ function extractViewingData(history = [], userText = '') {
 
 
 // =====================================================
-// هل المحادثة الحالية داخل طلب معاينة؟
+// هل المحادثة داخل مسار المعاينة؟
 // =====================================================
 
 function viewingFlowIsActive(history = [], userText = '') {
+
+  // الرسالة الحالية نفسها طلب معاينة
   if (isViewingRequest(userText)) {
     return true;
   }
 
-  const recent = history.slice(-10);
+  const recent = history.slice(-15);
 
+  // هل ظهر طلب معاينة سابقًا في المحادثة؟
+  const previousViewingRequest =
+    recent.some((message) =>
+      isViewingRequest(
+        message.content || ''
+      )
+    );
+
+  if (previousViewingRequest) {
+    return true;
+  }
+
+  // هل البوت سبق وبدأ يجمع بيانات الموعد؟
   return recent.some((message) => {
-    const text = normalizeArabicText(message.content || '');
+    const text =
+      normalizeArabicText(
+        message.content || ''
+      );
 
     return (
+      text.includes('حدد لي اي يوم') ||
+      text.includes('حددلي اي يوم') ||
       text.includes('حدد لي اليوم') ||
       text.includes('حددلي اليوم') ||
       text.includes('الساعة كم') ||
       text.includes('الساعه كم') ||
       text.includes('هل انت المشتري ولا مكتب') ||
-      text.includes('مشتري ولا مكتب')
+      text.includes('مشتري ولا مكتب') ||
+      text.includes('مكتب عقاري')
     );
   });
 }
 
 
 // =====================================================
-// محاولة معرفة العقار الحالي من المحادثة
+// محاولة معرفة العقار الحالي
 // =====================================================
 
 function detectCurrentProperty(history = [], userText = '') {
-  const combined = [
+  const messages = [
     ...history.map((m) => m.content || ''),
     userText,
-  ].join(' ');
+  ];
 
-  const t = normalizeArabicText(combined);
-
-  if (
-    t.includes('الخالدية') ||
-    t.includes('عمارة الخالدية')
+  // نبدأ من أحدث رسالة ونرجع للخلف
+  for (
+    let i = messages.length - 1;
+    i >= 0;
+    i--
   ) {
-    return 'عمارة الخالدية الاستثمارية';
-  }
+    const t =
+      normalizeArabicText(
+        messages[i]
+      );
 
-  if (
-    t.includes('شوران') ||
-    t.includes('شقة شوران')
-  ) {
-    return 'شقة شوران';
-  }
+    if (
+      t.includes('الخالدية') ||
+      t.includes('عمارة الخالدية')
+    ) {
+      return 'عمارة الخالدية الاستثمارية';
+    }
 
-  if (
-    t.includes('حي المطار') ||
-    t.includes('فيلا المطار')
-  ) {
-    return 'فيلا حي المطار';
+    if (
+      t.includes('شوران') ||
+      t.includes('شقة شوران') ||
+      t.includes('شقه شوران')
+    ) {
+      return 'شقة شوران';
+    }
+
+    if (
+      t.includes('حي المطار') ||
+      t.includes('فيلا المطار')
+    ) {
+      return 'فيلا حي المطار';
+    }
   }
 
   return 'العقار الحالي';
@@ -393,6 +516,7 @@ const SADIN_OFFERS = `
 15 دورة مياه.
 
 تفاصيل الدور الأرضي:
+
 ملحق خارجي مكون من:
 غرفة.
 مطبخ.
@@ -865,7 +989,11 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 // الاتصال بـ Claude
 // =====================================================
 
-async function callClaude(system, messages, maxTokens = 1200) {
+async function callClaude(
+  system,
+  messages,
+  maxTokens = 1200
+) {
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
@@ -894,7 +1022,8 @@ async function callClaude(system, messages, maxTokens = 1200) {
     console.error(
       'تفاصيل خطأ Claude API:',
       JSON.stringify(
-        err.response?.data || err.message,
+        err.response?.data ||
+          err.message,
         null,
         2
       )
@@ -910,7 +1039,10 @@ async function callClaude(system, messages, maxTokens = 1200) {
 // =====================================================
 
 function tryParseClaudeResponse(rawText) {
-  if (!rawText || typeof rawText !== 'string') {
+  if (
+    !rawText ||
+    typeof rawText !== 'string'
+  ) {
     return null;
   }
 
@@ -925,21 +1057,27 @@ function tryParseClaudeResponse(rawText) {
     // نكمل
   }
 
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
+  const firstBrace =
+    cleaned.indexOf('{');
+
+  const lastBrace =
+    cleaned.lastIndexOf('}');
 
   if (
     firstBrace !== -1 &&
     lastBrace !== -1 &&
     lastBrace > firstBrace
   ) {
-    const possibleJson = cleaned.slice(
-      firstBrace,
-      lastBrace + 1
-    );
+    const possibleJson =
+      cleaned.slice(
+        firstBrace,
+        lastBrace + 1
+      );
 
     try {
-      return JSON.parse(possibleJson);
+      return JSON.parse(
+        possibleJson
+      );
     } catch (e) {
       // نص عادي
     }
@@ -953,36 +1091,50 @@ function tryParseClaudeResponse(rawText) {
 // إنشاء الرد
 // =====================================================
 
-async function generateReply(history, userText) {
+async function generateReply(
+  history,
+  userText
+) {
   try {
 
     // =================================================
-    // طلب معاينة / وقوف على العقار
+    // طلب معاينة / وقوف
     // =================================================
 
-    if (viewingFlowIsActive(history, userText)) {
-      const viewing = extractViewingData(
+    if (
+      viewingFlowIsActive(
         history,
         userText
-      );
+      )
+    ) {
+      const viewing =
+        extractViewingData(
+          history,
+          userText
+        );
 
-      const property = detectCurrentProperty(
-        history,
-        userText
-      );
+      const property =
+        detectCurrentProperty(
+          history,
+          userText
+        );
 
+      // لو اليوم ناقص
       if (!viewing.day) {
         return 'أبشر 👍 حدد لي أي يوم حاب توقف على العقار؟';
       }
 
+      // لو الساعة ناقصة
       if (!viewing.time) {
         return `تمام 👍 يوم ${viewing.day}. الساعة كم يناسبك؟`;
       }
 
+      // لو نوع العميل ناقص
       if (!viewing.customerType) {
         return 'تمام 👍 هل أنت المشتري ولا مكتب عقاري؟';
       }
 
+      // كل البيانات اكتملت
       return `تم تسجيل طلب الوقوف على ${property} 👍
 
 اليوم: ${viewing.day}
@@ -997,7 +1149,11 @@ async function generateReply(history, userText) {
     // التمويل
     // =================================================
 
-    if (customerAskedAboutFinance(userText)) {
+    if (
+      customerAskedAboutFinance(
+        userText
+      )
+    ) {
       return 'نعم، فيه تمويل 👍';
     }
 
@@ -1006,7 +1162,11 @@ async function generateReply(history, userText) {
     // الرهن
     // =================================================
 
-    if (customerAskedAboutMortgage(userText)) {
+    if (
+      customerAskedAboutMortgage(
+        userText
+      )
+    ) {
       return 'لا، العقار ليس عليه رهن أبدًا.';
     }
 
@@ -1015,16 +1175,24 @@ async function generateReply(history, userText) {
     // الإيجار
     // =================================================
 
-    if (customerAskedAboutRent(userText)) {
+    if (
+      customerAskedAboutRent(
+        userText
+      )
+    ) {
       return 'أيوه موجود، وفيه معارض ومكاتب وعماير، وإن شاء الله أرسل لك المتوفر الآن 🌹';
     }
 
 
     // =================================================
-    // طلب تفاصيل أكثر
+    // تفاصيل أكثر
     // =================================================
 
-    if (customerAskedForMoreDetails(userText)) {
+    if (
+      customerAskedForMoreDetails(
+        userText
+      )
+    ) {
       console.log(
         'العميل طلب تفاصيل أكثر - إرسال بيانات التواصل'
       );
@@ -1034,7 +1202,7 @@ async function generateReply(history, userText) {
 
 
     // =================================================
-    // إرسال المحادثة لـ Claude
+    // Claude
     // =================================================
 
     const messages = [
@@ -1045,10 +1213,11 @@ async function generateReply(history, userText) {
       },
     ];
 
-    const rawExtraction = await callClaude(
-      EXTRACTION_SYSTEM_PROMPT,
-      messages
-    );
+    const rawExtraction =
+      await callClaude(
+        EXTRACTION_SYSTEM_PROMPT,
+        messages
+      );
 
     if (!rawExtraction) {
       console.error(
@@ -1058,9 +1227,14 @@ async function generateReply(history, userText) {
       return 'ياهلا فيك 🌹 ممكن تعيد رسالتك مرة ثانية؟';
     }
 
-    const parsed =
-      tryParseClaudeResponse(rawExtraction);
 
+    const parsed =
+      tryParseClaudeResponse(
+        rawExtraction
+      );
+
+
+    // Claude رجع نص عادي
     if (!parsed) {
       console.log(
         'Claude رجع نص عادي - سيتم إرساله مباشرة للعميل'
@@ -1069,7 +1243,11 @@ async function generateReply(history, userText) {
       return rawExtraction.trim();
     }
 
-    if (parsed.ready_to_search !== true) {
+
+    // لا يحتاج بحث
+    if (
+      parsed.ready_to_search !== true
+    ) {
       if (
         parsed.reply &&
         typeof parsed.reply === 'string' &&
@@ -1080,6 +1258,11 @@ async function generateReply(history, userText) {
 
       return 'ياهلا فيك 🌹 وش حاب تعرف عن العقار؟';
     }
+
+
+    // =================================================
+    // البحث
+    // =================================================
 
     const criteria =
       parsed.criteria &&
@@ -1092,12 +1275,21 @@ async function generateReply(history, userText) {
     try {
       matches =
         searchProperties({
-          city: criteria.city || null,
-          district: criteria.district || null,
+          city:
+            criteria.city || null,
+
+          district:
+            criteria.district || null,
+
           property_type:
-            criteria.property_type || null,
-          purpose: criteria.purpose || null,
-          limit: 5,
+            criteria.property_type ||
+            null,
+
+          purpose:
+            criteria.purpose || null,
+
+          limit:
+            5,
         }) || [];
 
     } catch (searchError) {
@@ -1109,37 +1301,42 @@ async function generateReply(history, userText) {
       return 'ما قدرت أوصل لنتائج البحث حاليًا 🌹 جرب مرة ثانية بعد شوي.';
     }
 
-    const resultsContext = matches.length
-      ? `نتائج البحث المتاحة فعليًا:\n${matches
-          .map((m) => {
-            const title =
-              m.title ||
-              m.property_type ||
-              'عقار';
 
-            const location =
-              `${m.city || ''} ${m.district || ''}`.trim();
+    const resultsContext =
+      matches.length
+        ? `نتائج البحث المتاحة فعليًا:\n${matches
+            .map((m) => {
+              const title =
+                m.title ||
+                m.property_type ||
+                'عقار';
 
-            const area =
-              m.area_sqm
-                ? `${m.area_sqm} م²`
-                : 'المساحة غير مذكورة';
+              const location =
+                `${m.city || ''} ${m.district || ''}`.trim();
 
-            const url =
-              m.url ||
-              'لا يوجد رابط';
+              const area =
+                m.area_sqm
+                  ? `${m.area_sqm} م²`
+                  : 'المساحة غير مذكورة';
 
-            return `- ${title} في ${location} — ${area} — ${url}`;
-          })
-          .join('\n')}`
-      : 'لا توجد نتائج مطابقة حاليًا في الفهرس.';
+              const url =
+                m.url ||
+                'لا يوجد رابط';
+
+              return `- ${title} في ${location} — ${area} — ${url}`;
+            })
+            .join('\n')}`
+        : 'لا توجد نتائج مطابقة حاليًا في الفهرس.';
+
 
     const groundedMessages = [
       ...messages,
+
       {
         role: 'assistant',
         content: rawExtraction,
       },
+
       {
         role: 'user',
         content: `[نتائج البحث الداخلية]
@@ -1151,10 +1348,13 @@ ${resultsContext}
       },
     ];
 
-    const finalReply = await callClaude(
-      GROUNDED_REPLY_SYSTEM_PROMPT,
-      groundedMessages
-    );
+
+    const finalReply =
+      await callClaude(
+        GROUNDED_REPLY_SYSTEM_PROMPT,
+        groundedMessages
+      );
+
 
     if (
       !finalReply ||
@@ -1163,6 +1363,7 @@ ${resultsContext}
     ) {
       return 'ما قدرت أوصل للنتيجة حاليًا 🌹 جرب مرة ثانية بعد شوي.';
     }
+
 
     return finalReply.trim();
 
@@ -1178,8 +1379,8 @@ ${resultsContext}
 
 
 // =====================================================
-// معرفة هل الرد أنهى طلب معاينة
-// server.js سيستخدمها لإرسال الطلب للإدارة
+// معرفة هل اكتمل طلب المعاينة
+// server.js يستخدمها للتسجيل والتنبيه
 // =====================================================
 
 function extractCompletedViewingRequest(
@@ -1188,13 +1389,19 @@ function extractCompletedViewingRequest(
   reply
 ) {
   if (
-    !viewingFlowIsActive(history, userText)
+    !viewingFlowIsActive(
+      history,
+      userText
+    )
   ) {
     return null;
   }
 
   const viewing =
-    extractViewingData(history, userText);
+    extractViewingData(
+      history,
+      userText
+    );
 
   if (
     !viewing.day ||
@@ -1204,6 +1411,7 @@ function extractCompletedViewingRequest(
     return null;
   }
 
+  // نتأكد إن الرد هو رد اكتمال الحجز
   if (
     !String(reply || '').includes(
       CONTACT_NUMBER
@@ -1213,12 +1421,18 @@ function extractCompletedViewingRequest(
   }
 
   return {
-    property: detectCurrentProperty(
-      history,
-      userText
-    ),
-    day: viewing.day,
-    time: viewing.time,
+    property:
+      detectCurrentProperty(
+        history,
+        userText
+      ),
+
+    day:
+      viewing.day,
+
+    time:
+      viewing.time,
+
     customerType:
       viewing.customerType,
   };
