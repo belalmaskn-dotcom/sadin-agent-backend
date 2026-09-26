@@ -1,5 +1,5 @@
 // server.js — Sadin AI Agent
-// WhatsApp + PostgreSQL + Admin Reports + Viewing Alerts
+// WhatsApp + PostgreSQL + Admin Reports + Viewing Sessions + Viewing Alerts
 
 require('dotenv').config();
 
@@ -10,7 +10,9 @@ const XLSX = require('xlsx');
 
 const {
   generateReply,
-  extractCompletedViewingRequest,
+  isViewingRequest,
+  extractViewingData,
+  detectCurrentProperty,
 } = require('./agentBrain');
 
 const app = express();
@@ -56,6 +58,7 @@ const ADMIN_WHATSAPP_NUMBERS =
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
+
   ssl: {
     rejectUnauthorized: false,
   },
@@ -69,29 +72,49 @@ const pool = new Pool({
 async function initializeDatabase() {
   try {
 
+    // -----------------------------------------------
+    // المحادثات
+    // -----------------------------------------------
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS conversations (
         id BIGSERIAL PRIMARY KEY,
-        customer_phone VARCHAR(30) NOT NULL,
-        role VARCHAR(20) NOT NULL,
-        message TEXT NOT NULL,
+
+        customer_phone VARCHAR(30)
+        NOT NULL,
+
+        role VARCHAR(20)
+        NOT NULL,
+
+        message TEXT
+        NOT NULL,
+
         whatsapp_message_id VARCHAR(255),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+        created_at TIMESTAMPTZ
+        NOT NULL DEFAULT NOW()
       );
     `);
 
+
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_customer_phone
+      CREATE INDEX IF NOT EXISTS
+      idx_conversations_customer_phone
       ON conversations(customer_phone);
     `);
 
+
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_created_at
+      CREATE INDEX IF NOT EXISTS
+      idx_conversations_created_at
       ON conversations(created_at);
     `);
 
 
-    // جدول طلبات المعاينة
+    // -----------------------------------------------
+    // طلبات المعاينة المكتملة
+    // -----------------------------------------------
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS viewing_requests (
         id BIGSERIAL PRIMARY KEY,
@@ -121,8 +144,52 @@ async function initializeDatabase() {
 
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_viewing_requests_created_at
+      CREATE INDEX IF NOT EXISTS
+      idx_viewing_requests_created_at
       ON viewing_requests(created_at);
+    `);
+
+
+    // -----------------------------------------------
+    // حالة المعاينة النشطة
+    // -----------------------------------------------
+    //
+    // دي أهم إضافة في النسخة الجديدة.
+    //
+    // بدل ما نعرف إن العميل داخل معاينة
+    // من رسائله القديمة،
+    // بنحفظ الحالة هنا.
+    //
+    // لما المعاينة تكتمل:
+    // status تتحول completed.
+    //
+    // وبالتالي "السلام عليكم"
+    // بعد كده مش هتفتح المعاينة القديمة.
+    // -----------------------------------------------
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS viewing_sessions (
+        customer_phone VARCHAR(30)
+        PRIMARY KEY,
+
+        property_name TEXT
+        NOT NULL,
+
+        requested_day VARCHAR(100),
+
+        requested_time VARCHAR(100),
+
+        customer_type VARCHAR(50),
+
+        status VARCHAR(30)
+        NOT NULL DEFAULT 'active',
+
+        created_at TIMESTAMPTZ
+        NOT NULL DEFAULT NOW(),
+
+        updated_at TIMESTAMPTZ
+        NOT NULL DEFAULT NOW()
+      );
     `);
 
 
@@ -132,6 +199,10 @@ async function initializeDatabase() {
 
     console.log(
       '✅ جدول طلبات المعاينة جاهز'
+    );
+
+    console.log(
+      '✅ جدول حالات المعاينة جاهز'
     );
 
   } catch (err) {
@@ -149,6 +220,7 @@ async function initializeDatabase() {
 // =====================================================
 
 function isAdminNumber(phone) {
+
   return ADMIN_WHATSAPP_NUMBERS.includes(
     String(phone).trim()
   );
@@ -164,9 +236,11 @@ function isAdminReportRequest(
     return false;
   }
 
+
   if (!ADMIN_REPORT_CODE) {
     return false;
   }
+
 
   return (
     String(text || '').trim() ===
@@ -197,6 +271,7 @@ async function saveMessage({
         message,
         whatsapp_message_id
       )
+
       VALUES ($1, $2, $3, $4)
       `,
       [
@@ -230,20 +305,32 @@ async function getConversationHistory(
     const result =
       await pool.query(
         `
-        SELECT role, message
+        SELECT
+          role,
+          message
+
         FROM conversations
+
         WHERE customer_phone = $1
-        ORDER BY created_at DESC, id DESC
+
+        ORDER BY
+          created_at DESC,
+          id DESC
+
         LIMIT 20
         `,
         [customerPhone]
       );
 
+
     return result.rows
       .reverse()
       .map((row) => ({
-        role: row.role,
-        content: row.message,
+        role:
+          row.role,
+
+        content:
+          row.message,
       }));
 
   } catch (err) {
@@ -270,18 +357,23 @@ async function messageAlreadyProcessed(
     return false;
   }
 
+
   try {
 
     const result =
       await pool.query(
         `
         SELECT id
+
         FROM conversations
+
         WHERE whatsapp_message_id = $1
+
         LIMIT 1
         `,
         [messageId]
       );
+
 
     return result.rowCount > 0;
 
@@ -298,7 +390,432 @@ async function messageAlreadyProcessed(
 
 
 // =====================================================
-// حفظ طلب المعاينة
+// حالة المعاينة النشطة
+// =====================================================
+
+async function getViewingSession(
+  customerPhone
+) {
+
+  try {
+
+    const result =
+      await pool.query(
+        `
+        SELECT
+          customer_phone,
+          property_name,
+          requested_day,
+          requested_time,
+          customer_type,
+          status
+
+        FROM viewing_sessions
+
+        WHERE customer_phone = $1
+
+        AND status = 'active'
+
+        LIMIT 1
+        `,
+        [customerPhone]
+      );
+
+
+    return result.rows[0] || null;
+
+  } catch (err) {
+
+    console.error(
+      '❌ فشل قراءة حالة المعاينة:',
+      err.message
+    );
+
+    return null;
+  }
+}
+
+
+// =====================================================
+// بدء معاينة جديدة
+// =====================================================
+
+async function startViewingSession(
+  customerPhone,
+  propertyName
+) {
+
+  const result =
+    await pool.query(
+      `
+      INSERT INTO viewing_sessions
+      (
+        customer_phone,
+        property_name,
+        requested_day,
+        requested_time,
+        customer_type,
+        status,
+        updated_at
+      )
+
+      VALUES (
+        $1,
+        $2,
+        NULL,
+        NULL,
+        NULL,
+        'active',
+        NOW()
+      )
+
+      ON CONFLICT (customer_phone)
+
+      DO UPDATE SET
+        property_name =
+          EXCLUDED.property_name,
+
+        requested_day =
+          NULL,
+
+        requested_time =
+          NULL,
+
+        customer_type =
+          NULL,
+
+        status =
+          'active',
+
+        updated_at =
+          NOW()
+
+      RETURNING
+        customer_phone,
+        property_name,
+        requested_day,
+        requested_time,
+        customer_type,
+        status
+      `,
+      [
+        customerPhone,
+        propertyName,
+      ]
+    );
+
+
+  return result.rows[0];
+}
+
+
+// =====================================================
+// تحديث بيانات المعاينة
+// =====================================================
+
+async function updateViewingSession(
+  customerPhone,
+  {
+    day = null,
+    time = null,
+    customerType = null,
+  }
+) {
+
+  const result =
+    await pool.query(
+      `
+      UPDATE viewing_sessions
+
+      SET
+        requested_day =
+          COALESCE(
+            $2,
+            requested_day
+          ),
+
+        requested_time =
+          COALESCE(
+            $3,
+            requested_time
+          ),
+
+        customer_type =
+          COALESCE(
+            $4,
+            customer_type
+          ),
+
+        updated_at =
+          NOW()
+
+      WHERE customer_phone = $1
+
+      AND status = 'active'
+
+      RETURNING
+        customer_phone,
+        property_name,
+        requested_day,
+        requested_time,
+        customer_type,
+        status
+      `,
+      [
+        customerPhone,
+        day,
+        time,
+        customerType,
+      ]
+    );
+
+
+  return result.rows[0] || null;
+}
+
+
+// =====================================================
+// إغلاق المعاينة
+// =====================================================
+
+async function closeViewingSession(
+  customerPhone
+) {
+
+  await pool.query(
+    `
+    UPDATE viewing_sessions
+
+    SET
+      status = 'completed',
+      updated_at = NOW()
+
+    WHERE customer_phone = $1
+
+    AND status = 'active'
+    `,
+    [customerPhone]
+  );
+}
+
+
+// =====================================================
+// معالجة مسار المعاينة
+// =====================================================
+
+async function processViewingFlow({
+  customerPhone,
+  userText,
+  history,
+}) {
+
+  let session =
+    await getViewingSession(
+      customerPhone
+    );
+
+
+  const newViewingRequest =
+    isViewingRequest(
+      userText
+    );
+
+
+  // -----------------------------------------------
+  // لا توجد معاينة نشطة
+  // والرسالة الحالية ليست طلب معاينة
+  //
+  // مثال:
+  // السلام عليكم
+  //
+  // هنا نخرج فورًا للمساعد الطبيعي.
+  // -----------------------------------------------
+
+  if (
+    !session &&
+    !newViewingRequest
+  ) {
+    return null;
+  }
+
+
+  // -----------------------------------------------
+  // بداية معاينة جديدة
+  // -----------------------------------------------
+
+  if (
+    !session &&
+    newViewingRequest
+  ) {
+
+    const propertyName =
+      detectCurrentProperty(
+        history,
+        userText
+      );
+
+
+    session =
+      await startViewingSession(
+        customerPhone,
+        propertyName
+      );
+
+
+    console.log(
+      `🏠 بدأ طلب معاينة جديد للعميل ${customerPhone}`
+    );
+  }
+
+
+  // -----------------------------------------------
+  // نستخرج البيانات فقط من الرسالة الحالية
+  //
+  // مش من المحادثات القديمة.
+  // -----------------------------------------------
+
+  const extracted =
+    extractViewingData(
+      [],
+      userText
+    );
+
+
+  session =
+    await updateViewingSession(
+      customerPhone,
+      {
+        day:
+          extracted.day,
+
+        time:
+          extracted.time,
+
+        customerType:
+          extracted.customerType,
+      }
+    );
+
+
+  if (!session) {
+
+    console.error(
+      `❌ تعذر تحميل جلسة المعاينة للعميل ${customerPhone}`
+    );
+
+    return null;
+  }
+
+
+  // -----------------------------------------------
+  // اليوم ناقص
+  // -----------------------------------------------
+
+  if (!session.requested_day) {
+
+    return {
+      handled: true,
+
+      completed: false,
+
+      reply:
+        'أبشر 👍 حدد لي أي يوم حاب توقف على العقار؟',
+    };
+  }
+
+
+  // -----------------------------------------------
+  // الساعة ناقصة
+  // -----------------------------------------------
+
+  if (!session.requested_time) {
+
+    return {
+      handled: true,
+
+      completed: false,
+
+      reply:
+        `تمام 👍 يوم ${session.requested_day}. الساعة كم يناسبك؟`,
+    };
+  }
+
+
+  // -----------------------------------------------
+  // نوع العميل ناقص
+  // -----------------------------------------------
+
+  if (!session.customer_type) {
+
+    return {
+      handled: true,
+
+      completed: false,
+
+      reply:
+        'تمام 👍 هل أنت المشتري ولا مكتب عقاري؟',
+    };
+  }
+
+
+  // -----------------------------------------------
+  // اكتمل الطلب
+  // -----------------------------------------------
+
+  const completedRequest = {
+
+    property:
+      session.property_name,
+
+    day:
+      session.requested_day,
+
+    time:
+      session.requested_time,
+
+    customerType:
+      session.customer_type,
+  };
+
+
+  // نقفل الجلسة قبل إرسال الرد والتنبيه.
+  //
+  // وبالتالي الرسالة التالية
+  // لا تعتبر جزءًا من المعاينة القديمة.
+
+  await closeViewingSession(
+    customerPhone
+  );
+
+
+  console.log(
+    `✅ اكتملت بيانات المعاينة للعميل ${customerPhone}`
+  );
+
+
+  return {
+
+    handled: true,
+
+    completed: true,
+
+    request:
+      completedRequest,
+
+    reply:
+`تم تسجيل طلب الوقوف على ${completedRequest.property} 👍
+
+اليوم: ${completedRequest.day}
+الوقت: ${completedRequest.time}
+الصفة: ${completedRequest.customerType}
+
+تواصل على الرقم 0530084666 لإكمال التنسيق.`,
+  };
+}
+
+
+// =====================================================
+// حفظ طلب المعاينة المكتمل
 // =====================================================
 
 async function saveViewingRequest({
@@ -320,7 +837,15 @@ async function saveViewingRequest({
         requested_time,
         customer_type
       )
-      VALUES ($1, $2, $3, $4, $5)
+
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5
+      )
+
       RETURNING id
       `,
       [
@@ -331,6 +856,7 @@ async function saveViewingRequest({
         customerType,
       ]
     );
+
 
   return result.rows[0]?.id;
 }
@@ -349,7 +875,9 @@ async function notifyAdminsAboutViewing({
   customerType,
 }) {
 
-  if (!ADMIN_WHATSAPP_NUMBERS.length) {
+  if (
+    !ADMIN_WHATSAPP_NUMBERS.length
+  ) {
 
     console.error(
       '⚠️ لا توجد أرقام إدارة لإرسال طلب المعاينة'
@@ -359,7 +887,8 @@ async function notifyAdminsAboutViewing({
   }
 
 
-  const alert = `🏠 طلب وقوف / معاينة جديد
+  const alert =
+`🏠 طلب وقوف / معاينة جديد
 
 رقم الطلب: ${requestId || '-'}
 
@@ -393,6 +922,7 @@ ${customerType}
         alert
       );
 
+
       console.log(
         `✅ تم إرسال طلب المعاينة للإدارة: ${adminPhone}`
       );
@@ -403,7 +933,7 @@ ${customerType}
         `❌ فشل إرسال المعاينة للإدارة ${adminPhone}:`,
         JSON.stringify(
           err.response?.data ||
-          err.message,
+            err.message,
           null,
           2
         )
@@ -424,10 +954,12 @@ async function getTodayCustomers() {
       ? ADMIN_WHATSAPP_NUMBERS
       : ['__NO_ADMIN__'];
 
+
   const result =
     await pool.query(
       `
-      SELECT DISTINCT customer_phone
+      SELECT DISTINCT
+        customer_phone
 
       FROM conversations
 
@@ -459,13 +991,16 @@ async function getTodayCustomers() {
         ANY($1::text[])
       )
 
-      ORDER BY customer_phone
+      ORDER BY
+        customer_phone
       `,
       [adminNumbers]
     );
 
+
   return result.rows.map(
-    (row) => row.customer_phone
+    (row) =>
+      row.customer_phone
   );
 }
 
@@ -511,10 +1046,13 @@ async function getTodayConversation(
         AT TIME ZONE 'Asia/Riyadh'
       )
 
-      ORDER BY created_at ASC, id ASC
+      ORDER BY
+        created_at ASC,
+        id ASC
       `,
       [customerPhone]
     );
+
 
   return result.rows;
 }
@@ -530,15 +1068,19 @@ function parseClaudeJson(text) {
     return null;
   }
 
+
   let cleaned =
     String(text)
       .replace(/```json/gi, '')
       .replace(/```/g, '')
       .trim();
 
+
   try {
 
-    return JSON.parse(cleaned);
+    return JSON.parse(
+      cleaned
+    );
 
   } catch (_) {
     // نكمل
@@ -595,8 +1137,8 @@ async function summarizeCustomer(
             ? 'العميل'
             : 'المساعد';
 
-        return `${speaker}: ${row.message}`;
 
+        return `${speaker}: ${row.message}`;
       })
       .join('\n');
 
@@ -632,6 +1174,7 @@ async function summarizeCustomer(
     const response =
       await axios.post(
         'https://api.anthropic.com/v1/messages',
+
         {
           model:
             'claude-sonnet-5',
@@ -644,7 +1187,8 @@ async function summarizeCustomer(
 
           messages: [
             {
-              role: 'user',
+              role:
+                'user',
 
               content:
 `رقم العميل: ${customerPhone}
@@ -655,8 +1199,10 @@ ${conversationText}`,
             },
           ],
         },
+
         {
           headers: {
+
             'Content-Type':
               'application/json',
 
@@ -684,12 +1230,15 @@ ${conversationText}`,
 
 
     const parsed =
-      parseClaudeJson(raw);
+      parseClaudeJson(
+        raw
+      );
 
 
     if (parsed) {
 
       return {
+
         interest:
           parsed.interest ||
           'غير محدد',
@@ -734,7 +1283,7 @@ ${conversationText}`,
       `❌ فشل تلخيص العميل ${customerPhone}:`,
       JSON.stringify(
         err.response?.data ||
-        err.message,
+          err.message,
         null,
         2
       )
@@ -756,6 +1305,7 @@ ${conversationText}`,
 
 
   return {
+
     interest:
       'غير محدد',
 
@@ -812,6 +1362,7 @@ function getSaudiDateString() {
       }
     );
 
+
   return formatter.format(
     new Date()
   );
@@ -831,10 +1382,18 @@ async function createDailyReport() {
   if (!customers.length) {
 
     return {
-      hasCustomers: false,
-      buffer: null,
-      filename: null,
-      count: 0,
+
+      hasCustomers:
+        false,
+
+      buffer:
+        null,
+
+      filename:
+        null,
+
+      count:
+        0,
     };
   }
 
@@ -853,7 +1412,9 @@ async function createDailyReport() {
       );
 
 
-    if (!conversation.length) {
+    if (
+      !conversation.length
+    ) {
       continue;
     }
 
@@ -900,13 +1461,23 @@ async function createDailyReport() {
   }
 
 
-  if (!reportRows.length) {
+  if (
+    !reportRows.length
+  ) {
 
     return {
-      hasCustomers: false,
-      buffer: null,
-      filename: null,
-      count: 0,
+
+      hasCustomers:
+        false,
+
+      buffer:
+        null,
+
+      filename:
+        null,
+
+      count:
+        0,
     };
   }
 
@@ -946,8 +1517,11 @@ async function createDailyReport() {
     XLSX.write(
       workbook,
       {
-        type: 'buffer',
-        bookType: 'xlsx',
+        type:
+          'buffer',
+
+        bookType:
+          'xlsx',
       }
     );
 
@@ -957,6 +1531,7 @@ async function createDailyReport() {
 
 
   return {
+
     hasCustomers:
       true,
 
@@ -999,10 +1574,12 @@ async function uploadDocumentToWhatsApp(
     'whatsapp'
   );
 
+
   form.append(
     'type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   );
+
 
   form.append(
     'file',
@@ -1014,9 +1591,12 @@ async function uploadDocumentToWhatsApp(
   const response =
     await axios.post(
       `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/media`,
+
       form,
+
       {
         headers: {
+
           Authorization:
             `Bearer ${WHATSAPP_TOKEN}`,
         },
@@ -1044,6 +1624,7 @@ async function sendWhatsAppDocument(
 
   await axios.post(
     `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
+
     {
       messaging_product:
         'whatsapp',
@@ -1054,6 +1635,7 @@ async function sendWhatsAppDocument(
         'document',
 
       document: {
+
         id:
           mediaId,
 
@@ -1062,8 +1644,10 @@ async function sendWhatsAppDocument(
         caption,
       },
     },
+
     {
       headers: {
+
         Authorization:
           `Bearer ${WHATSAPP_TOKEN}`,
 
@@ -1103,7 +1687,9 @@ async function handleAdminReport(
       await createDailyReport();
 
 
-    if (!report.hasCustomers) {
+    if (
+      !report.hasCustomers
+    ) {
 
       await sendWhatsAppMessage(
         adminPhone,
@@ -1139,7 +1725,7 @@ async function handleAdminReport(
       '❌ فشل إنشاء أو إرسال التقرير:',
       JSON.stringify(
         err.response?.data ||
-        err.message,
+          err.message,
         null,
         2
       )
@@ -1164,15 +1750,18 @@ async function handleAdminReport(
 
 app.get(
   '/webhook',
+
   (req, res) => {
 
     const mode =
       req.query['hub.mode'];
 
+
     const token =
       req.query[
         'hub.verify_token'
       ];
+
 
     const challenge =
       req.query[
@@ -1189,13 +1778,16 @@ app.get(
         '✅ تم التحقق من الويب هوك بنجاح'
       );
 
+
       return res
         .status(200)
         .send(challenge);
     }
 
 
-    return res.sendStatus(403);
+    return res.sendStatus(
+      403
+    );
   }
 );
 
@@ -1206,9 +1798,11 @@ app.get(
 
 app.post(
   '/webhook',
+
   async (req, res) => {
 
     // نرد على Meta فورًا
+
     res.sendStatus(200);
 
 
@@ -1217,13 +1811,17 @@ app.post(
       const entry =
         req.body.entry?.[0];
 
+
       const change =
         entry?.changes?.[0];
+
 
       const message =
         change?.value
           ?.messages?.[0];
 
+
+      // النسخة الحالية تتعامل مع الرسائل النصية فقط.
 
       if (
         !message ||
@@ -1236,16 +1834,21 @@ app.post(
       const from =
         message.from;
 
+
       const text =
         message.text
           ?.body
           ?.trim();
 
+
       const messageId =
         message.id;
 
 
-      if (!from || !text) {
+      if (
+        !from ||
+        !text
+      ) {
         return;
       }
 
@@ -1269,6 +1872,7 @@ app.post(
         await handleAdminReport(
           from
         );
+
 
         return;
       }
@@ -1295,12 +1899,14 @@ app.post(
           `⚠️ تم تجاهل رسالة مكررة: ${messageId}`
         );
 
+
         return;
       }
 
 
       // =================================================
-      // السياق السابق
+      // تحميل السياق السابق
+      // مهم: قبل حفظ الرسالة الحالية
       // =================================================
 
       const history =
@@ -1314,6 +1920,7 @@ app.post(
       // =================================================
 
       await saveMessage({
+
         customerPhone:
           from,
 
@@ -1329,28 +1936,55 @@ app.post(
 
 
       // =================================================
-      // توليد الرد
+      // المعاينة أولًا
       // =================================================
 
-      const reply =
-        await generateReply(
+      const viewingFlow =
+        await processViewingFlow({
+
+          customerPhone:
+            from,
+
+          userText:
+            text,
+
           history,
-          text
-        );
+        });
 
 
-      // =================================================
-      // هل اكتمل طلب معاينة؟
-      // مهم: نستخدم history قبل إضافة الرسالة الحالية
-      // لأن userText يتم تمريره منفصلًا
-      // =================================================
+      let reply;
 
-      const viewingRequest =
-        extractCompletedViewingRequest(
-          history,
-          text,
-          reply
-        );
+      let viewingRequest =
+        null;
+
+
+      if (
+        viewingFlow?.handled
+      ) {
+
+        reply =
+          viewingFlow.reply;
+
+
+        if (
+          viewingFlow.completed
+        ) {
+
+          viewingRequest =
+            viewingFlow.request;
+        }
+
+      } else {
+
+        // لا توجد معاينة نشطة.
+        // نستخدم المساعد العقاري الطبيعي.
+
+        reply =
+          await generateReply(
+            history,
+            text
+          );
+      }
 
 
       // =================================================
@@ -1358,6 +1992,7 @@ app.post(
       // =================================================
 
       await saveMessage({
+
         customerPhone:
           from,
 
@@ -1380,15 +2015,18 @@ app.post(
 
 
       // =================================================
-      // لو طلب معاينة مكتمل
+      // لو المعاينة اكتملت
       // =================================================
 
-      if (viewingRequest) {
+      if (
+        viewingRequest
+      ) {
 
         try {
 
           const requestId =
             await saveViewingRequest({
+
               customerPhone:
                 from,
 
@@ -1412,6 +2050,7 @@ app.post(
 
 
           await notifyAdminsAboutViewing({
+
             requestId,
 
             customerPhone:
@@ -1431,13 +2070,15 @@ app.post(
           });
 
 
-        } catch (viewingError) {
+        } catch (
+          viewingError
+        ) {
 
           console.error(
             '❌ خطأ في تسجيل/إرسال طلب المعاينة:',
             JSON.stringify(
               viewingError.response?.data ||
-              viewingError.message,
+                viewingError.message,
               null,
               2
             )
@@ -1452,7 +2093,7 @@ app.post(
         '❌ تفاصيل الخطأ:',
         JSON.stringify(
           err.response?.data ||
-          err.message,
+            err.message,
           null,
           2
         )
@@ -1473,6 +2114,7 @@ async function sendWhatsAppMessage(
 
   await axios.post(
     `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
+
     {
       messaging_product:
         'whatsapp',
@@ -1487,8 +2129,10 @@ async function sendWhatsAppMessage(
           text,
       },
     },
+
     {
       headers: {
+
         Authorization:
           `Bearer ${WHATSAPP_TOKEN}`,
 
@@ -1509,6 +2153,7 @@ async function sendWhatsAppMessage(
 
 app.get(
   '/',
+
   (req, res) => {
 
     res.send(
@@ -1523,20 +2168,24 @@ app.get(
 // =====================================================
 
 const PORT =
-  process.env.PORT || 3000;
+  process.env.PORT ||
+  3000;
 
 
 app.listen(
   PORT,
+
   async () => {
 
     console.log(
       `🚀 السيرفر شغال على بورت ${PORT}`
     );
 
+
     console.log(
       `🔐 عدد أرقام الإدارة: ${ADMIN_WHATSAPP_NUMBERS.length}`
     );
+
 
     await initializeDatabase();
   }
