@@ -154,4 +154,3 @@ main();
 
 module.exports = {
   fetchBayutProperty,
-};Add Bayut property sync
