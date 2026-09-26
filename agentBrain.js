@@ -147,53 +147,38 @@ function isViewingRequest(text = '') {
   const t = normalizeArabicText(text);
 
   const phrases = [
-    // الوقوف
     'اوقف على العقار',
     'اوقف عالعقار',
     'اوقف عليه',
     'اوقف عليها',
-    'اوقف على هذا',
-    'اوقف على هذي',
     'اوقف على الشقه',
     'اوقف على الشقة',
     'اوقف على الفيلا',
     'اوقف على العماره',
     'اوقف على العمارة',
 
-    // أبي / أبغى
     'ابي اوقف',
     'ابغى اوقف',
     'ودي اوقف',
-
-    // محتاج / احتاج
     'محتاج اوقف',
     'احتاج اوقف',
-    'احتاج اني اوقف',
-
-    // صيغ مصرية محتملة من العميل
     'عايز اوقف',
     'عاوز اوقف',
 
-    // مشاهدة العقار
     'ابي اشوف العقار',
     'ابغى اشوف العقار',
-    'ودي اشوف العقار',
     'محتاج اشوف العقار',
     'احتاج اشوف العقار',
     'عايز اشوف العقار',
-    'عاوز اشوف العقار',
     'اشوف العقار',
     'اشوفها',
     'اشوفه',
 
-    // المعاينة
     'ابي اعاين',
     'ابغى اعاين',
-    'ودي اعاين',
     'محتاج اعاين',
     'احتاج اعاين',
     'عايز اعاين',
-    'عاوز اعاين',
     'اعاين العقار',
     'اعاينها',
     'اعاينه',
@@ -202,7 +187,6 @@ function isViewingRequest(text = '') {
     'موعد معاينه',
     'موعد معاينة',
 
-    // الحجز
     'احجز معاينه',
     'احجز معاينة',
     'احجز موعد',
@@ -214,12 +198,10 @@ function isViewingRequest(text = '') {
     'موعد للمعاينه',
     'موعد للمعاينة',
 
-    // الزيارة
     'ابي ازور العقار',
     'ابغى ازور العقار',
     'محتاج ازور العقار',
     'احتاج ازور العقار',
-    'عايز ازور العقار',
     'زيارة العقار',
     'زياره العقار',
   ];
@@ -231,28 +213,18 @@ function isViewingRequest(text = '') {
 
 
 // =====================================================
-// استخراج معلومات المعاينة من المحادثة
+// استخراج بيانات المعاينة من الرسالة الحالية
 // =====================================================
 
 function extractViewingData(history = [], userText = '') {
-  const allMessages = [
-    ...history
-      .filter((m) => m.role === 'user')
-      .map((m) => m.content),
-    userText,
-  ]
-    .filter(Boolean)
-    .join(' ');
-
-  const text = normalizeArabicText(allMessages);
+  const raw = String(userText || '');
+  const text = normalizeArabicText(raw);
 
   let customerType = null;
 
   if (
-    text.includes('انا المشتري') ||
     text.includes('مشتري') ||
     text.includes('المشتري') ||
-    text.includes('مشتري مباشر') ||
     text.includes('انا شاري') ||
     text.includes('شاري')
   ) {
@@ -270,13 +242,9 @@ function extractViewingData(history = [], userText = '') {
   }
 
 
-  // ===================================================
-  // اليوم
-  // ===================================================
-
   let day = null;
 
-  const dayPatterns = [
+  const days = [
     'اليوم',
     'بكره',
     'بكرة',
@@ -305,9 +273,9 @@ function extractViewingData(history = [], userText = '') {
     'الجمعة',
   ];
 
-  for (const d of dayPatterns) {
+  for (const d of days) {
     if (
-      normalizeArabicText(allMessages).includes(
+      text.includes(
         normalizeArabicText(d)
       )
     ) {
@@ -316,7 +284,8 @@ function extractViewingData(history = [], userText = '') {
     }
   }
 
-  const dateMatch = allMessages.match(
+
+  const dateMatch = raw.match(
     /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/
   );
 
@@ -325,13 +294,9 @@ function extractViewingData(history = [], userText = '') {
   }
 
 
-  // ===================================================
-  // الساعة
-  // ===================================================
-
   let time = null;
 
-  const timePatterns = [
+  const patterns = [
     /(?:الساعة|الساعه)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
 
     /\b(\d{1,2}):(\d{2})\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?\b/i,
@@ -339,11 +304,11 @@ function extractViewingData(history = [], userText = '') {
     /(?:الوقت|وقت)\s*(\d{1,2})(?::(\d{2}))?\s*(صباحا|صباحًا|صباح|مساء|مساءً|العصر|الظهر|المغرب|الليل|م|ص)?/i,
   ];
 
-  for (const pattern of timePatterns) {
-    const match = allMessages.match(pattern);
+  for (const p of patterns) {
+    const m = raw.match(p);
 
-    if (match) {
-      time = match[0];
+    if (m) {
+      time = m[0];
       break;
     }
   }
@@ -358,63 +323,34 @@ function extractViewingData(history = [], userText = '') {
 
 
 // =====================================================
-// هل المحادثة داخل مسار المعاينة؟
+// المعاينة لا تستمر من history
+// server.js هو المسؤول عن حفظ حالة المعاينة
 // =====================================================
 
-function viewingFlowIsActive(history = [], userText = '') {
-
-  // الرسالة الحالية نفسها طلب معاينة
-  if (isViewingRequest(userText)) {
-    return true;
-  }
-
-  const recent = history.slice(-15);
-
-  // هل ظهر طلب معاينة سابقًا في المحادثة؟
-  const previousViewingRequest =
-    recent.some((message) =>
-      isViewingRequest(
-        message.content || ''
-      )
-    );
-
-  if (previousViewingRequest) {
-    return true;
-  }
-
-  // هل البوت سبق وبدأ يجمع بيانات الموعد؟
-  return recent.some((message) => {
-    const text =
-      normalizeArabicText(
-        message.content || ''
-      );
-
-    return (
-      text.includes('حدد لي اي يوم') ||
-      text.includes('حددلي اي يوم') ||
-      text.includes('حدد لي اليوم') ||
-      text.includes('حددلي اليوم') ||
-      text.includes('الساعة كم') ||
-      text.includes('الساعه كم') ||
-      text.includes('هل انت المشتري ولا مكتب') ||
-      text.includes('مشتري ولا مكتب') ||
-      text.includes('مكتب عقاري')
-    );
-  });
+function viewingFlowIsActive(
+  history = [],
+  userText = ''
+) {
+  return isViewingRequest(userText);
 }
 
 
 // =====================================================
-// محاولة معرفة العقار الحالي
+// معرفة العقار الحالي
+// نبدأ من أحدث رسالة حتى لا نرجع لعقار قديم
 // =====================================================
 
-function detectCurrentProperty(history = [], userText = '') {
+function detectCurrentProperty(
+  history = [],
+  userText = ''
+) {
   const messages = [
-    ...history.map((m) => m.content || ''),
+    ...history.map(
+      (m) => m.content || ''
+    ),
     userText,
   ];
 
-  // نبدأ من أحدث رسالة ونرجع للخلف
   for (
     let i = messages.length - 1;
     i >= 0;
@@ -425,12 +361,14 @@ function detectCurrentProperty(history = [], userText = '') {
         messages[i]
       );
 
+
     if (
       t.includes('الخالدية') ||
       t.includes('عمارة الخالدية')
     ) {
       return 'عمارة الخالدية الاستثمارية';
     }
+
 
     if (
       t.includes('شوران') ||
@@ -440,6 +378,7 @@ function detectCurrentProperty(history = [], userText = '') {
       return 'شقة شوران';
     }
 
+
     if (
       t.includes('حي المطار') ||
       t.includes('فيلا المطار')
@@ -447,6 +386,7 @@ function detectCurrentProperty(history = [], userText = '') {
       return 'فيلا حي المطار';
     }
   }
+
 
   return 'العقار الحالي';
 }
@@ -772,6 +712,7 @@ ${SADIN_OFFERS}
 لا تخترع.
 
 قل:
+
 "المعلومة هذي مو متوفرة عندي حاليًا 🌹"
 
 =====================================================
@@ -781,6 +722,7 @@ ${SADIN_OFFERS}
 تم تأكيد أن التمويل متوفر.
 
 إذا سأل العميل:
+
 فيه تمويل؟
 هل يوجد تمويل؟
 يقبل تمويل؟
@@ -797,6 +739,7 @@ ${SADIN_OFFERS}
 تم تأكيد أن العقارات ليست عليها رهن.
 
 إذا سأل العميل:
+
 هل العقار عليه رهن؟
 مرهون؟
 فيه رهن؟
@@ -822,6 +765,7 @@ ${SADIN_OFFERS}
 التفاوض:
 
 إذا قال:
+
 غالية
 السعر مرتفع
 يمدي نتفاهم؟
@@ -833,6 +777,7 @@ ${SADIN_OFFERS}
 ممنوع اختراع خصم أو سعر جديد أو موافقة المالك.
 
 إذا قال:
+
 كم آخر سعر؟
 
 قل:
@@ -897,6 +842,7 @@ ${SADIN_OFFERS}
 إذا العميل غيّر العقار، انتقل للعقار الجديد.
 
 إذا قال:
+
 خلنا في هذا
 هذا اللي أبيه
 أنا مهتم بهذا
@@ -972,6 +918,7 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 
 إذا معلومة غير موجودة:
 قل:
+
 "المعلومة هذي مو متوفرة عندي حاليًا."
 
 ممنوع إرسال:
@@ -1005,16 +952,26 @@ async function callClaude(
       },
       {
         headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
+          'Content-Type':
+            'application/json',
+
+          'x-api-key':
+            ANTHROPIC_API_KEY,
+
+          'anthropic-version':
+            '2023-06-01',
         },
+
         timeout: 30000,
       }
     );
 
+
     return res.data.content
-      .map((b) => b.text || '')
+      .map(
+        (b) =>
+          b.text || ''
+      )
       .join('')
       .trim();
 
@@ -1038,7 +995,9 @@ async function callClaude(
 // قراءة JSON
 // =====================================================
 
-function tryParseClaudeResponse(rawText) {
+function tryParseClaudeResponse(
+  rawText
+) {
   if (
     !rawText ||
     typeof rawText !== 'string'
@@ -1046,22 +1005,28 @@ function tryParseClaudeResponse(rawText) {
     return null;
   }
 
-  let cleaned = rawText
-    .replace(/```json/gi, '')
-    .replace(/```/g, '')
-    .trim();
+
+  let cleaned =
+    rawText
+      .replace(/```json/gi, '')
+      .replace(/```/g, '')
+      .trim();
+
 
   try {
     return JSON.parse(cleaned);
+
   } catch (e) {
     // نكمل
   }
+
 
   const firstBrace =
     cleaned.indexOf('{');
 
   const lastBrace =
     cleaned.lastIndexOf('}');
+
 
   if (
     firstBrace !== -1 &&
@@ -1078,10 +1043,12 @@ function tryParseClaudeResponse(rawText) {
       return JSON.parse(
         possibleJson
       );
+
     } catch (e) {
       // نص عادي
     }
   }
+
 
   return null;
 }
@@ -1098,51 +1065,10 @@ async function generateReply(
   try {
 
     // =================================================
-    // طلب معاينة / وقوف
+    // مهم:
+    // المعاينة لم تعد تتم هنا
+    // server.js مسؤول عنها بالكامل
     // =================================================
-
-    if (
-      viewingFlowIsActive(
-        history,
-        userText
-      )
-    ) {
-      const viewing =
-        extractViewingData(
-          history,
-          userText
-        );
-
-      const property =
-        detectCurrentProperty(
-          history,
-          userText
-        );
-
-      // لو اليوم ناقص
-      if (!viewing.day) {
-        return 'أبشر 👍 حدد لي أي يوم حاب توقف على العقار؟';
-      }
-
-      // لو الساعة ناقصة
-      if (!viewing.time) {
-        return `تمام 👍 يوم ${viewing.day}. الساعة كم يناسبك؟`;
-      }
-
-      // لو نوع العميل ناقص
-      if (!viewing.customerType) {
-        return 'تمام 👍 هل أنت المشتري ولا مكتب عقاري؟';
-      }
-
-      // كل البيانات اكتملت
-      return `تم تسجيل طلب الوقوف على ${property} 👍
-
-اليوم: ${viewing.day}
-الوقت: ${viewing.time}
-الصفة: ${viewing.customerType}
-
-تواصل على الرقم ${CONTACT_NUMBER} لإكمال التنسيق.`;
-    }
 
 
     // =================================================
@@ -1185,7 +1111,7 @@ async function generateReply(
 
 
     // =================================================
-    // تفاصيل أكثر
+    // طلب تفاصيل أكثر
     // =================================================
 
     if (
@@ -1202,22 +1128,25 @@ async function generateReply(
 
 
     // =================================================
-    // Claude
+    // إرسال المحادثة لـ Claude
     // =================================================
 
     const messages = [
       ...history,
+
       {
         role: 'user',
         content: userText,
       },
     ];
 
+
     const rawExtraction =
       await callClaude(
         EXTRACTION_SYSTEM_PROMPT,
         messages
       );
+
 
     if (!rawExtraction) {
       console.error(
@@ -1234,7 +1163,6 @@ async function generateReply(
       );
 
 
-    // Claude رجع نص عادي
     if (!parsed) {
       console.log(
         'Claude رجع نص عادي - سيتم إرساله مباشرة للعميل'
@@ -1244,49 +1172,52 @@ async function generateReply(
     }
 
 
-    // لا يحتاج بحث
     if (
       parsed.ready_to_search !== true
     ) {
       if (
         parsed.reply &&
-        typeof parsed.reply === 'string' &&
+        typeof parsed.reply ===
+          'string' &&
         parsed.reply.trim()
       ) {
         return parsed.reply.trim();
       }
 
+
       return 'ياهلا فيك 🌹 وش حاب تعرف عن العقار؟';
     }
 
 
-    // =================================================
-    // البحث
-    // =================================================
-
     const criteria =
       parsed.criteria &&
-      typeof parsed.criteria === 'object'
+      typeof parsed.criteria ===
+        'object'
         ? parsed.criteria
         : {};
 
+
     let matches = [];
+
 
     try {
       matches =
         searchProperties({
           city:
-            criteria.city || null,
+            criteria.city ||
+            null,
 
           district:
-            criteria.district || null,
+            criteria.district ||
+            null,
 
           property_type:
             criteria.property_type ||
             null,
 
           purpose:
-            criteria.purpose || null,
+            criteria.purpose ||
+            null,
 
           limit:
             5,
@@ -1298,6 +1229,7 @@ async function generateReply(
         searchError
       );
 
+
       return 'ما قدرت أوصل لنتائج البحث حاليًا 🌹 جرب مرة ثانية بعد شوي.';
     }
 
@@ -1305,27 +1237,35 @@ async function generateReply(
     const resultsContext =
       matches.length
         ? `نتائج البحث المتاحة فعليًا:\n${matches
-            .map((m) => {
-              const title =
-                m.title ||
-                m.property_type ||
-                'عقار';
+            .map(
+              (m) => {
 
-              const location =
-                `${m.city || ''} ${m.district || ''}`.trim();
+                const title =
+                  m.title ||
+                  m.property_type ||
+                  'عقار';
 
-              const area =
-                m.area_sqm
-                  ? `${m.area_sqm} م²`
-                  : 'المساحة غير مذكورة';
 
-              const url =
-                m.url ||
-                'لا يوجد رابط';
+                const location =
+                  `${m.city || ''} ${m.district || ''}`.trim();
 
-              return `- ${title} في ${location} — ${area} — ${url}`;
-            })
+
+                const area =
+                  m.area_sqm
+                    ? `${m.area_sqm} م²`
+                    : 'المساحة غير مذكورة';
+
+
+                const url =
+                  m.url ||
+                  'لا يوجد رابط';
+
+
+                return `- ${title} في ${location} — ${area} — ${url}`;
+              }
+            )
             .join('\n')}`
+
         : 'لا توجد نتائج مطابقة حاليًا في الفهرس.';
 
 
@@ -1339,7 +1279,9 @@ async function generateReply(
 
       {
         role: 'user',
-        content: `[نتائج البحث الداخلية]
+
+        content:
+`[نتائج البحث الداخلية]
 ${resultsContext}
 
 اكتب الرد النهائي للعميل بناءً على النتائج فقط.
@@ -1358,7 +1300,8 @@ ${resultsContext}
 
     if (
       !finalReply ||
-      typeof finalReply !== 'string' ||
+      typeof finalReply !==
+        'string' ||
       !finalReply.trim()
     ) {
       return 'ما قدرت أوصل للنتيجة حاليًا 🌹 جرب مرة ثانية بعد شوي.';
@@ -1367,75 +1310,16 @@ ${resultsContext}
 
     return finalReply.trim();
 
+
   } catch (err) {
     console.error(
       'خطأ غير متوقع في generateReply:',
       err
     );
 
+
     return 'ياهلا فيك 🌹 ممكن تعيد رسالتك مرة ثانية؟';
   }
-}
-
-
-// =====================================================
-// معرفة هل اكتمل طلب المعاينة
-// server.js يستخدمها للتسجيل والتنبيه
-// =====================================================
-
-function extractCompletedViewingRequest(
-  history,
-  userText,
-  reply
-) {
-  if (
-    !viewingFlowIsActive(
-      history,
-      userText
-    )
-  ) {
-    return null;
-  }
-
-  const viewing =
-    extractViewingData(
-      history,
-      userText
-    );
-
-  if (
-    !viewing.day ||
-    !viewing.time ||
-    !viewing.customerType
-  ) {
-    return null;
-  }
-
-  // نتأكد إن الرد هو رد اكتمال الحجز
-  if (
-    !String(reply || '').includes(
-      CONTACT_NUMBER
-    )
-  ) {
-    return null;
-  }
-
-  return {
-    property:
-      detectCurrentProperty(
-        history,
-        userText
-      ),
-
-    day:
-      viewing.day,
-
-    time:
-      viewing.time,
-
-    customerType:
-      viewing.customerType,
-  };
 }
 
 
@@ -1445,5 +1329,7 @@ function extractCompletedViewingRequest(
 
 module.exports = {
   generateReply,
-  extractCompletedViewingRequest,
+  isViewingRequest,
+  extractViewingData,
+  detectCurrentProperty,
 };
