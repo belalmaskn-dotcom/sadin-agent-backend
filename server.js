@@ -1,5 +1,5 @@
 // server.js — Sadin AI Agent
-// WhatsApp + PostgreSQL + Daily Admin Excel Report
+// WhatsApp + PostgreSQL + Admin Reports + Viewing Alerts
 
 require('dotenv').config();
 
@@ -7,7 +7,11 @@ const express = require('express');
 const axios = require('axios');
 const { Pool } = require('pg');
 const XLSX = require('xlsx');
-const { generateReply } = require('./agentBrain');
+
+const {
+  generateReply,
+  extractCompletedViewingRequest,
+} = require('./agentBrain');
 
 const app = express();
 app.use(express.json());
@@ -17,18 +21,30 @@ app.use(express.json());
 // Environment Variables
 // =====================================================
 
-const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const DATABASE_URL = process.env.DATABASE_URL;
+const VERIFY_TOKEN =
+  process.env.WHATSAPP_VERIFY_TOKEN;
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const WHATSAPP_TOKEN =
+  process.env.WHATSAPP_TOKEN;
+
+const PHONE_NUMBER_ID =
+  process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+const DATABASE_URL =
+  process.env.DATABASE_URL;
+
+const ANTHROPIC_API_KEY =
+  process.env.ANTHROPIC_API_KEY;
 
 const ADMIN_REPORT_CODE =
-  String(process.env.ADMIN_REPORT_CODE || '').trim();
+  String(
+    process.env.ADMIN_REPORT_CODE || ''
+  ).trim();
 
 const ADMIN_WHATSAPP_NUMBERS =
-  String(process.env.ADMIN_WHATSAPP_NUMBERS || '')
+  String(
+    process.env.ADMIN_WHATSAPP_NUMBERS || ''
+  )
     .split(',')
     .map((number) => number.trim())
     .filter(Boolean);
@@ -74,7 +90,49 @@ async function initializeDatabase() {
       ON conversations(created_at);
     `);
 
-    console.log('✅ قاعدة بيانات العملاء جاهزة');
+
+    // جدول طلبات المعاينة
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS viewing_requests (
+        id BIGSERIAL PRIMARY KEY,
+
+        customer_phone VARCHAR(30)
+        NOT NULL,
+
+        property_name TEXT
+        NOT NULL,
+
+        requested_day VARCHAR(100)
+        NOT NULL,
+
+        requested_time VARCHAR(100)
+        NOT NULL,
+
+        customer_type VARCHAR(50)
+        NOT NULL,
+
+        status VARCHAR(50)
+        NOT NULL DEFAULT 'new',
+
+        created_at TIMESTAMPTZ
+        NOT NULL DEFAULT NOW()
+      );
+    `);
+
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_viewing_requests_created_at
+      ON viewing_requests(created_at);
+    `);
+
+
+    console.log(
+      '✅ قاعدة بيانات العملاء جاهزة'
+    );
+
+    console.log(
+      '✅ جدول طلبات المعاينة جاهز'
+    );
 
   } catch (err) {
 
@@ -87,7 +145,7 @@ async function initializeDatabase() {
 
 
 // =====================================================
-// هل الرقم إداري؟
+// الإدارة
 // =====================================================
 
 function isAdminNumber(phone) {
@@ -97,11 +155,10 @@ function isAdminNumber(phone) {
 }
 
 
-// =====================================================
-// هل الرسالة هي كود التقرير؟
-// =====================================================
-
-function isAdminReportRequest(phone, text) {
+function isAdminReportRequest(
+  phone,
+  text
+) {
 
   if (!isAdminNumber(phone)) {
     return false;
@@ -119,7 +176,7 @@ function isAdminReportRequest(phone, text) {
 
 
 // =====================================================
-// حفظ رسالة
+// حفظ الرسائل
 // =====================================================
 
 async function saveMessage({
@@ -153,7 +210,7 @@ async function saveMessage({
   } catch (err) {
 
     console.error(
-      '❌ فشل حفظ الرسالة في قاعدة البيانات:',
+      '❌ فشل حفظ الرسالة:',
       err.message
     );
   }
@@ -161,23 +218,26 @@ async function saveMessage({
 
 
 // =====================================================
-// تحميل آخر المحادثة
+// تحميل سياق العميل
 // =====================================================
 
-async function getConversationHistory(customerPhone) {
+async function getConversationHistory(
+  customerPhone
+) {
 
   try {
 
-    const result = await pool.query(
-      `
-      SELECT role, message
-      FROM conversations
-      WHERE customer_phone = $1
-      ORDER BY created_at DESC, id DESC
-      LIMIT 20
-      `,
-      [customerPhone]
-    );
+    const result =
+      await pool.query(
+        `
+        SELECT role, message
+        FROM conversations
+        WHERE customer_phone = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 20
+        `,
+        [customerPhone]
+      );
 
     return result.rows
       .reverse()
@@ -199,10 +259,12 @@ async function getConversationHistory(customerPhone) {
 
 
 // =====================================================
-// منع معالجة نفس رسالة واتساب مرتين
+// منع تكرار الرسائل
 // =====================================================
 
-async function messageAlreadyProcessed(messageId) {
+async function messageAlreadyProcessed(
+  messageId
+) {
 
   if (!messageId) {
     return false;
@@ -210,22 +272,23 @@ async function messageAlreadyProcessed(messageId) {
 
   try {
 
-    const result = await pool.query(
-      `
-      SELECT id
-      FROM conversations
-      WHERE whatsapp_message_id = $1
-      LIMIT 1
-      `,
-      [messageId]
-    );
+    const result =
+      await pool.query(
+        `
+        SELECT id
+        FROM conversations
+        WHERE whatsapp_message_id = $1
+        LIMIT 1
+        `,
+        [messageId]
+      );
 
     return result.rowCount > 0;
 
   } catch (err) {
 
     console.error(
-      '❌ خطأ أثناء فحص الرسالة المكررة:',
+      '❌ خطأ أثناء فحص التكرار:',
       err.message
     );
 
@@ -235,7 +298,123 @@ async function messageAlreadyProcessed(messageId) {
 
 
 // =====================================================
-// جلب عملاء اليوم بتوقيت السعودية
+// حفظ طلب المعاينة
+// =====================================================
+
+async function saveViewingRequest({
+  customerPhone,
+  property,
+  day,
+  time,
+  customerType,
+}) {
+
+  const result =
+    await pool.query(
+      `
+      INSERT INTO viewing_requests
+      (
+        customer_phone,
+        property_name,
+        requested_day,
+        requested_time,
+        customer_type
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
+      `,
+      [
+        customerPhone,
+        property,
+        day,
+        time,
+        customerType,
+      ]
+    );
+
+  return result.rows[0]?.id;
+}
+
+
+// =====================================================
+// إرسال تنبيه المعاينة للإدارة
+// =====================================================
+
+async function notifyAdminsAboutViewing({
+  requestId,
+  customerPhone,
+  property,
+  day,
+  time,
+  customerType,
+}) {
+
+  if (!ADMIN_WHATSAPP_NUMBERS.length) {
+
+    console.error(
+      '⚠️ لا توجد أرقام إدارة لإرسال طلب المعاينة'
+    );
+
+    return;
+  }
+
+
+  const alert = `🏠 طلب وقوف / معاينة جديد
+
+رقم الطلب: ${requestId || '-'}
+
+العقار:
+${property}
+
+رقم العميل:
+${customerPhone}
+
+اليوم:
+${day}
+
+الساعة:
+${time}
+
+صفة العميل:
+${customerType}
+
+📌 يفضّل التواصل مع العميل لتأكيد الموعد.`;
+
+
+  for (
+    const adminPhone
+    of ADMIN_WHATSAPP_NUMBERS
+  ) {
+
+    try {
+
+      await sendWhatsAppMessage(
+        adminPhone,
+        alert
+      );
+
+      console.log(
+        `✅ تم إرسال طلب المعاينة للإدارة: ${adminPhone}`
+      );
+
+    } catch (err) {
+
+      console.error(
+        `❌ فشل إرسال المعاينة للإدارة ${adminPhone}:`,
+        JSON.stringify(
+          err.response?.data ||
+          err.message,
+          null,
+          2
+        )
+      );
+    }
+  }
+}
+
+
+// =====================================================
+// جلب عملاء اليوم
 // =====================================================
 
 async function getTodayCustomers() {
@@ -245,41 +424,45 @@ async function getTodayCustomers() {
       ? ADMIN_WHATSAPP_NUMBERS
       : ['__NO_ADMIN__'];
 
-  const result = await pool.query(
-    `
-    SELECT DISTINCT customer_phone
-    FROM conversations
-    WHERE role = 'user'
+  const result =
+    await pool.query(
+      `
+      SELECT DISTINCT customer_phone
+
+      FROM conversations
+
+      WHERE role = 'user'
 
       AND created_at >=
+      (
+        DATE_TRUNC(
+          'day',
+          NOW() AT TIME ZONE 'Asia/Riyadh'
+        )
+        AT TIME ZONE 'Asia/Riyadh'
+      )
+
+      AND created_at <
+      (
         (
           DATE_TRUNC(
             'day',
             NOW() AT TIME ZONE 'Asia/Riyadh'
           )
-          AT TIME ZONE 'Asia/Riyadh'
+          + INTERVAL '1 day'
         )
-
-      AND created_at <
-        (
-          (
-            DATE_TRUNC(
-              'day',
-              NOW() AT TIME ZONE 'Asia/Riyadh'
-            )
-            + INTERVAL '1 day'
-          )
-          AT TIME ZONE 'Asia/Riyadh'
-        )
-
-      AND NOT (
-        customer_phone = ANY($1::text[])
+        AT TIME ZONE 'Asia/Riyadh'
       )
 
-    ORDER BY customer_phone
-    `,
-    [adminNumbers]
-  );
+      AND NOT (
+        customer_phone =
+        ANY($1::text[])
+      )
+
+      ORDER BY customer_phone
+      `,
+      [adminNumbers]
+    );
 
   return result.rows.map(
     (row) => row.customer_phone
@@ -288,53 +471,57 @@ async function getTodayCustomers() {
 
 
 // =====================================================
-// جلب محادثة عميل اليوم فقط
+// محادثة العميل اليوم
 // =====================================================
 
-async function getTodayConversation(customerPhone) {
+async function getTodayConversation(
+  customerPhone
+) {
 
-  const result = await pool.query(
-    `
-    SELECT
-      role,
-      message,
-      created_at
-    FROM conversations
+  const result =
+    await pool.query(
+      `
+      SELECT
+        role,
+        message,
+        created_at
 
-    WHERE customer_phone = $1
+      FROM conversations
+
+      WHERE customer_phone = $1
 
       AND created_at >=
+      (
+        DATE_TRUNC(
+          'day',
+          NOW() AT TIME ZONE 'Asia/Riyadh'
+        )
+        AT TIME ZONE 'Asia/Riyadh'
+      )
+
+      AND created_at <
+      (
         (
           DATE_TRUNC(
             'day',
             NOW() AT TIME ZONE 'Asia/Riyadh'
           )
-          AT TIME ZONE 'Asia/Riyadh'
+          + INTERVAL '1 day'
         )
+        AT TIME ZONE 'Asia/Riyadh'
+      )
 
-      AND created_at <
-        (
-          (
-            DATE_TRUNC(
-              'day',
-              NOW() AT TIME ZONE 'Asia/Riyadh'
-            )
-            + INTERVAL '1 day'
-          )
-          AT TIME ZONE 'Asia/Riyadh'
-        )
-
-    ORDER BY created_at ASC, id ASC
-    `,
-    [customerPhone]
-  );
+      ORDER BY created_at ASC, id ASC
+      `,
+      [customerPhone]
+    );
 
   return result.rows;
 }
 
 
 // =====================================================
-// تنظيف JSON القادم من Claude
+// قراءة JSON من Claude
 // =====================================================
 
 function parseClaudeJson(text) {
@@ -343,22 +530,27 @@ function parseClaudeJson(text) {
     return null;
   }
 
-  let cleaned = String(text)
-    .replace(/```json/gi, '')
-    .replace(/```/g, '')
-    .trim();
+  let cleaned =
+    String(text)
+      .replace(/```json/gi, '')
+      .replace(/```/g, '')
+      .trim();
 
   try {
+
     return JSON.parse(cleaned);
+
   } catch (_) {
     // نكمل
   }
+
 
   const firstBrace =
     cleaned.indexOf('{');
 
   const lastBrace =
     cleaned.lastIndexOf('}');
+
 
   if (
     firstBrace !== -1 &&
@@ -375,16 +567,18 @@ function parseClaudeJson(text) {
       );
 
     } catch (_) {
+
       return null;
     }
   }
+
 
   return null;
 }
 
 
 // =====================================================
-// تلخيص العميل بالذكاء الاصطناعي
+// تلخيص العميل للتقرير
 // =====================================================
 
 async function summarizeCustomer(
@@ -410,32 +604,14 @@ async function summarizeCustomer(
   const systemPrompt = `
 أنت مسؤول CRM لمكتب سدّين للعقار.
 
-أمامك محادثة بين عميل ومساعد عقاري.
-
-مهمتك استخراج المعلومات المهمة فقط
-حتى يستخدمها موظف المبيعات للمتابعة.
+استخرج المعلومات المهمة فقط من المحادثة.
 
 ممنوع اختراع أي معلومة.
 
 إذا المعلومة غير موجودة اكتب:
 "غير محدد"
 
-ركز على:
-
-- ماذا يريد العميل؟
-- نوع العقار.
-- الحي أو الموقع.
-- الميزانية إن ذكرها.
-- العقار الذي اهتم به.
-- أهم الأسئلة أو الطلبات.
-- هل طلب تفاصيل أكثر؟
-- هل ظهر أنه جاد أو مهتم؟
-- ما الخطوة المناسبة للمتابعة؟
-
-لا تنسخ المحادثة كاملة.
-لا تكتب كلامًا زائدًا.
-
-أرجع JSON صالح فقط بهذا الشكل:
+أرجع JSON صالح فقط:
 
 {
   "interest": "",
@@ -453,45 +629,56 @@ async function summarizeCustomer(
 
   try {
 
-    const response = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-sonnet-5',
-        max_tokens: 700,
-        system: systemPrompt,
+    const response =
+      await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model:
+            'claude-sonnet-5',
 
-        messages: [
-          {
-            role: 'user',
-            content:
-              `رقم العميل: ${customerPhone}
+          max_tokens:
+            700,
+
+          system:
+            systemPrompt,
+
+          messages: [
+            {
+              role: 'user',
+
+              content:
+`رقم العميل: ${customerPhone}
 
 محادثة اليوم:
 
 ${conversationText}`,
-          },
-        ],
-      },
-      {
-        headers: {
-          'Content-Type':
-            'application/json',
-
-          'x-api-key':
-            ANTHROPIC_API_KEY,
-
-          'anthropic-version':
-            '2023-06-01',
+            },
+          ],
         },
+        {
+          headers: {
+            'Content-Type':
+              'application/json',
 
-        timeout: 30000,
-      }
-    );
+            'x-api-key':
+              ANTHROPIC_API_KEY,
+
+            'anthropic-version':
+              '2023-06-01',
+          },
+
+          timeout:
+            30000,
+        }
+      );
 
 
     const raw =
       response.data.content
-        .map((item) => item.text || '')
+        .map(
+          (item) =>
+            item.text || ''
+        )
         .join('')
         .trim();
 
@@ -541,7 +728,6 @@ ${conversationText}`,
       };
     }
 
-
   } catch (err) {
 
     console.error(
@@ -556,38 +742,54 @@ ${conversationText}`,
   }
 
 
-  // في حالة فشل Claude
-  // لا نخسر العميل من التقرير
-
   const userMessages =
     conversation
       .filter(
-        (row) => row.role === 'user'
+        (row) =>
+          row.role === 'user'
       )
       .map(
-        (row) => row.message
+        (row) =>
+          row.message
       )
       .join(' | ');
 
 
   return {
-    interest: 'غير محدد',
-    property_type: 'غير محدد',
-    district: 'غير محدد',
-    budget: 'غير محدد',
-    property: 'غير محدد',
+    interest:
+      'غير محدد',
+
+    property_type:
+      'غير محدد',
+
+    district:
+      'غير محدد',
+
+    budget:
+      'غير محدد',
+
+    property:
+      'غير محدد',
+
     important_request:
-      userMessages || 'غير محدد',
-    status: 'غير محدد',
-    follow_up: 'مراجعة المحادثة',
+      userMessages ||
+      'غير محدد',
+
+    status:
+      'غير محدد',
+
+    follow_up:
+      'مراجعة المحادثة',
+
     summary:
-      userMessages || 'غير محدد',
+      userMessages ||
+      'غير محدد',
   };
 }
 
 
 // =====================================================
-// التاريخ الحالي بتوقيت السعودية
+// تاريخ السعودية
 // =====================================================
 
 function getSaudiDateString() {
@@ -596,19 +798,28 @@ function getSaudiDateString() {
     new Intl.DateTimeFormat(
       'en-CA',
       {
-        timeZone: 'Asia/Riyadh',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
+        timeZone:
+          'Asia/Riyadh',
+
+        year:
+          'numeric',
+
+        month:
+          '2-digit',
+
+        day:
+          '2-digit',
       }
     );
 
-  return formatter.format(new Date());
+  return formatter.format(
+    new Date()
+  );
 }
 
 
 // =====================================================
-// إنشاء ملف Excel
+// إنشاء تقرير Excel
 // =====================================================
 
 async function createDailyReport() {
@@ -631,14 +842,15 @@ async function createDailyReport() {
   const reportRows = [];
 
 
-  for (let i = 0; i < customers.length; i++) {
-
-    const phone =
-      customers[i];
-
+  for (
+    const phone
+    of customers
+  ) {
 
     const conversation =
-      await getTodayConversation(phone);
+      await getTodayConversation(
+        phone
+      );
 
 
     if (!conversation.length) {
@@ -654,6 +866,7 @@ async function createDailyReport() {
 
 
     reportRows.push({
+
       'رقم العميل':
         phone,
 
@@ -704,7 +917,6 @@ async function createDailyReport() {
     );
 
 
-  // عرض الأعمدة
   worksheet['!cols'] = [
     { wch: 18 },
     { wch: 25 },
@@ -745,7 +957,8 @@ async function createDailyReport() {
 
 
   return {
-    hasCustomers: true,
+    hasCustomers:
+      true,
 
     buffer,
 
@@ -759,7 +972,7 @@ async function createDailyReport() {
 
 
 // =====================================================
-// رفع ملف Excel إلى WhatsApp / Meta
+// رفع التقرير لواتساب
 // =====================================================
 
 async function uploadDocumentToWhatsApp(
@@ -808,7 +1021,8 @@ async function uploadDocumentToWhatsApp(
             `Bearer ${WHATSAPP_TOKEN}`,
         },
 
-        timeout: 60000,
+        timeout:
+          60000,
       }
     );
 
@@ -818,7 +1032,7 @@ async function uploadDocumentToWhatsApp(
 
 
 // =====================================================
-// إرسال ملف على واتساب
+// إرسال مستند
 // =====================================================
 
 async function sendWhatsAppDocument(
@@ -857,17 +1071,20 @@ async function sendWhatsAppDocument(
           'application/json',
       },
 
-      timeout: 60000,
+      timeout:
+        60000,
     }
   );
 }
 
 
 // =====================================================
-// تنفيذ التقرير الإداري
+// التقرير الإداري
 // =====================================================
 
-async function handleAdminReport(adminPhone) {
+async function handleAdminReport(
+  adminPhone
+) {
 
   try {
 
@@ -916,7 +1133,6 @@ async function handleAdminReport(adminPhone) {
       `✅ تم إرسال التقرير إلى ${adminPhone}`
     );
 
-
   } catch (err) {
 
     console.error(
@@ -937,9 +1153,7 @@ async function handleAdminReport(adminPhone) {
         'صار خطأ أثناء تجهيز التقرير. جرّب مرة ثانية بعد شوي.'
       );
 
-    } catch (_) {
-      // لا شيء
-    }
+    } catch (_) {}
   }
 }
 
@@ -948,219 +1162,308 @@ async function handleAdminReport(adminPhone) {
 // Webhook Verification
 // =====================================================
 
-app.get('/webhook', (req, res) => {
+app.get(
+  '/webhook',
+  (req, res) => {
 
-  const mode =
-    req.query['hub.mode'];
+    const mode =
+      req.query['hub.mode'];
 
-  const token =
-    req.query['hub.verify_token'];
+    const token =
+      req.query[
+        'hub.verify_token'
+      ];
 
-  const challenge =
-    req.query['hub.challenge'];
+    const challenge =
+      req.query[
+        'hub.challenge'
+      ];
 
-
-  if (
-    mode === 'subscribe' &&
-    token === VERIFY_TOKEN
-  ) {
-
-    console.log(
-      '✅ تم التحقق من الويب هوك بنجاح'
-    );
-
-    return res
-      .status(200)
-      .send(challenge);
-  }
-
-
-  return res.sendStatus(403);
-});
-
-
-// =====================================================
-// استقبال رسائل واتساب
-// =====================================================
-
-app.post('/webhook', async (req, res) => {
-
-  // الرد على Meta فورًا
-  res.sendStatus(200);
-
-
-  try {
-
-    const entry =
-      req.body.entry?.[0];
-
-    const change =
-      entry?.changes?.[0];
-
-    const message =
-      change?.value?.messages?.[0];
-
-
-    // نتعامل مع النصوص حاليًا
-    if (
-      !message ||
-      message.type !== 'text'
-    ) {
-      return;
-    }
-
-
-    const from =
-      message.from;
-
-    const text =
-      message.text?.body?.trim();
-
-    const messageId =
-      message.id;
-
-
-    if (!from || !text) {
-      return;
-    }
-
-
-    console.log(
-      `📩 رسالة من ${from}: ${text}`
-    );
-
-
-    // =================================================
-    // التقرير الإداري
-    // =================================================
 
     if (
-      isAdminReportRequest(
-        from,
-        text
-      )
+      mode === 'subscribe' &&
+      token === VERIFY_TOKEN
     ) {
 
       console.log(
-        '🔐 تم التعرف على طلب التقرير الإداري'
+        '✅ تم التحقق من الويب هوك بنجاح'
       );
 
-
-      await handleAdminReport(
-        from
-      );
-
-
-      // مهم:
-      // لا نحفظ الكود السري في محادثات العملاء
-      // ولا نرسله إلى Claude
-      return;
+      return res
+        .status(200)
+        .send(challenge);
     }
 
 
-    // =================================================
-    // منع تكرار رسائل العملاء
-    // =================================================
-
-    const duplicate =
-      await messageAlreadyProcessed(
-        messageId
-      );
-
-
-    if (duplicate) {
-
-      console.log(
-        `⚠️ تم تجاهل رسالة مكررة: ${messageId}`
-      );
-
-      return;
-    }
-
-
-    // =================================================
-    // تحميل السياق السابق
-    // =================================================
-
-    const history =
-      await getConversationHistory(
-        from
-      );
-
-
-    // =================================================
-    // حفظ رسالة العميل
-    // =================================================
-
-    await saveMessage({
-      customerPhone:
-        from,
-
-      role:
-        'user',
-
-      message:
-        text,
-
-      whatsappMessageId:
-        messageId,
-    });
-
-
-    // =================================================
-    // رد البوت
-    // =================================================
-
-    const reply =
-      await generateReply(
-        history,
-        text
-      );
-
-
-    // =================================================
-    // حفظ رد البوت
-    // =================================================
-
-    await saveMessage({
-      customerPhone:
-        from,
-
-      role:
-        'assistant',
-
-      message:
-        reply,
-    });
-
-
-    // =================================================
-    // إرسال الرد
-    // =================================================
-
-    await sendWhatsAppMessage(
-      from,
-      reply
-    );
-
-
-  } catch (err) {
-
-    console.error(
-      '❌ تفاصيل الخطأ:',
-      JSON.stringify(
-        err.response?.data ||
-        err.message,
-        null,
-        2
-      )
-    );
+    return res.sendStatus(403);
   }
-});
+);
 
 
 // =====================================================
-// إرسال رسالة نصية
+// استقبال واتساب
+// =====================================================
+
+app.post(
+  '/webhook',
+  async (req, res) => {
+
+    // نرد على Meta فورًا
+    res.sendStatus(200);
+
+
+    try {
+
+      const entry =
+        req.body.entry?.[0];
+
+      const change =
+        entry?.changes?.[0];
+
+      const message =
+        change?.value
+          ?.messages?.[0];
+
+
+      if (
+        !message ||
+        message.type !== 'text'
+      ) {
+        return;
+      }
+
+
+      const from =
+        message.from;
+
+      const text =
+        message.text
+          ?.body
+          ?.trim();
+
+      const messageId =
+        message.id;
+
+
+      if (!from || !text) {
+        return;
+      }
+
+
+      // =================================================
+      // التقرير السري
+      // =================================================
+
+      if (
+        isAdminReportRequest(
+          from,
+          text
+        )
+      ) {
+
+        console.log(
+          '🔐 تم التعرف على طلب التقرير الإداري'
+        );
+
+
+        await handleAdminReport(
+          from
+        );
+
+        return;
+      }
+
+
+      console.log(
+        `📩 رسالة من ${from}: ${text}`
+      );
+
+
+      // =================================================
+      // منع التكرار
+      // =================================================
+
+      const duplicate =
+        await messageAlreadyProcessed(
+          messageId
+        );
+
+
+      if (duplicate) {
+
+        console.log(
+          `⚠️ تم تجاهل رسالة مكررة: ${messageId}`
+        );
+
+        return;
+      }
+
+
+      // =================================================
+      // السياق السابق
+      // =================================================
+
+      const history =
+        await getConversationHistory(
+          from
+        );
+
+
+      // =================================================
+      // حفظ رسالة العميل
+      // =================================================
+
+      await saveMessage({
+        customerPhone:
+          from,
+
+        role:
+          'user',
+
+        message:
+          text,
+
+        whatsappMessageId:
+          messageId,
+      });
+
+
+      // =================================================
+      // توليد الرد
+      // =================================================
+
+      const reply =
+        await generateReply(
+          history,
+          text
+        );
+
+
+      // =================================================
+      // هل اكتمل طلب معاينة؟
+      // مهم: نستخدم history قبل إضافة الرسالة الحالية
+      // لأن userText يتم تمريره منفصلًا
+      // =================================================
+
+      const viewingRequest =
+        extractCompletedViewingRequest(
+          history,
+          text,
+          reply
+        );
+
+
+      // =================================================
+      // حفظ رد البوت
+      // =================================================
+
+      await saveMessage({
+        customerPhone:
+          from,
+
+        role:
+          'assistant',
+
+        message:
+          reply,
+      });
+
+
+      // =================================================
+      // إرسال الرد للعميل
+      // =================================================
+
+      await sendWhatsAppMessage(
+        from,
+        reply
+      );
+
+
+      // =================================================
+      // لو طلب معاينة مكتمل
+      // =================================================
+
+      if (viewingRequest) {
+
+        try {
+
+          const requestId =
+            await saveViewingRequest({
+              customerPhone:
+                from,
+
+              property:
+                viewingRequest.property,
+
+              day:
+                viewingRequest.day,
+
+              time:
+                viewingRequest.time,
+
+              customerType:
+                viewingRequest.customerType,
+            });
+
+
+          console.log(
+            `🏠 تم تسجيل طلب معاينة رقم ${requestId}`
+          );
+
+
+          await notifyAdminsAboutViewing({
+            requestId,
+
+            customerPhone:
+              from,
+
+            property:
+              viewingRequest.property,
+
+            day:
+              viewingRequest.day,
+
+            time:
+              viewingRequest.time,
+
+            customerType:
+              viewingRequest.customerType,
+          });
+
+
+        } catch (viewingError) {
+
+          console.error(
+            '❌ خطأ في تسجيل/إرسال طلب المعاينة:',
+            JSON.stringify(
+              viewingError.response?.data ||
+              viewingError.message,
+              null,
+              2
+            )
+          );
+        }
+      }
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ تفاصيل الخطأ:',
+        JSON.stringify(
+          err.response?.data ||
+          err.message,
+          null,
+          2
+        )
+      );
+    }
+  }
+);
+
+
+// =====================================================
+// إرسال رسالة واتساب
 // =====================================================
 
 async function sendWhatsAppMessage(
@@ -1193,7 +1496,8 @@ async function sendWhatsAppMessage(
           'application/json',
       },
 
-      timeout: 30000,
+      timeout:
+        30000,
     }
   );
 }
@@ -1203,12 +1507,15 @@ async function sendWhatsAppMessage(
 // الصفحة الرئيسية
 // =====================================================
 
-app.get('/', (req, res) => {
+app.get(
+  '/',
+  (req, res) => {
 
-  res.send(
-    'Sadin AI Agent — شغال ✅'
-  );
-});
+    res.send(
+      'Sadin AI Agent — شغال ✅'
+    );
+  }
+);
 
 
 // =====================================================
@@ -1227,11 +1534,9 @@ app.listen(
       `🚀 السيرفر شغال على بورت ${PORT}`
     );
 
-
     console.log(
       `🔐 عدد أرقام الإدارة: ${ADMIN_WHATSAPP_NUMBERS.length}`
     );
-
 
     await initializeDatabase();
   }
