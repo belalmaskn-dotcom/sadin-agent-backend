@@ -790,9 +790,7 @@ function extractViewingTime(
 
     return `${writtenHour}${suffix}`;
   }
-
-
-  // -----------------------------------------------
+    // -----------------------------------------------
   // لو البوت سأل عن الساعة
   // والعميل رد فقط:
   //
@@ -1480,8 +1478,6 @@ const SADIN_OFFERS = `
 رخصة الإعلان:
 7201065492.
 `;
-
-
 // =====================================================
 // تعليمات Claude
 // =====================================================
@@ -1587,9 +1583,12 @@ ${SADIN_OFFERS}
 
 إذا العميل يبحث عن إيجار:
 
-قل:
+لا تفترض أن نوعًا معينًا متوفر.
 
-"أيوه موجود، وفيه معارض ومكاتب وعماير، وإن شاء الله أرسل لك المتوفر الآن 🌹"
+استخرج طلب العميل وأرسل purpose = "rent".
+
+إذا كان العميل يسأل فقط هل يوجد إيجار بدون تحديد نوع العقار:
+يمكنك الرد بشكل طبيعي بأن عقارات الإيجار متوفرة، واطلب منه تحديد النوع أو احتياجه إذا لزم.
 
 لا تخترع عرض إيجار غير موجود.
 
@@ -1769,23 +1768,154 @@ ${SADIN_OFFERS}
 
 =====================================================
 
+البحث في عقارات سدّين:
+
+يوجد فهرس يحتوي على عقارات سدّين الفعلية.
+
+إذا كان العميل يبحث عن عقار حسب احتياج مثل:
+
+شقة للبيع
+فيلا للإيجار
+شقة 4 غرف
+عقار في حي معين
+عقار بميزانية محددة
+عقار بمساحة محددة
+أرض للبيع
+
+استخرج معايير البحث بدقة.
+
+السعر:
+
+إذا قال العميل:
+500 ألف
+حوالي 500 ألف
+ميزانيتي 500 ألف
+أقصى شيء 500 ألف
+ما يتجاوز 500 ألف
+
+استخدم max_price = 500000.
+
+إذا قال:
+من 500 إلى 700 ألف
+
+استخدم:
+min_price = 500000
+max_price = 700000
+
+إذا قال:
+مليون
+
+حوّلها إلى:
+1000000
+
+إذا قال:
+مليون ونص
+
+حوّلها إلى:
+1500000
+
+الغرف:
+
+إذا قال:
+4 غرف
+أبي شقة أربع غرف
+
+استخدم:
+rooms = 4
+
+إذا قال:
+على الأقل 4 غرف
+
+استخدم:
+min_rooms = 4
+
+المساحة:
+
+إذا قال:
+200 متر
+مساحة 200
+حوالي 200 متر
+
+يمكن استخدام مساحة مناسبة حسب معنى الطلب.
+
+إذا قال:
+أقل شيء 200 متر
+
+استخدم:
+min_area = 200
+
+إذا قال:
+ما تتجاوز 300 متر
+
+استخدم:
+max_area = 300
+
+=====================================================
+
 يفضل أن ترجع JSON صالح بالشكل التالي:
 
 {
   "reply": "الرد المناسب للعميل",
   "criteria": {
-    "property_type": "قيمة أو null",
-    "purpose": "sale أو rent أو null",
-    "city": "قيمة أو null",
-    "district": "قيمة أو null"
+    "property_type": null,
+    "purpose": null,
+    "city": null,
+    "district": null,
+    "min_price": null,
+    "max_price": null,
+    "min_area": null,
+    "max_area": null,
+    "rooms": null,
+    "min_rooms": null,
+    "max_rooms": null
   },
   "ready_to_search": false
 }
 
+purpose يجب أن يكون:
+"sale"
+أو:
+"rent"
+أو:
+null
+
+لا تضع أرقامًا كنصوص إذا أمكن.
+مثال:
+500000
+وليس:
+"500 ألف"
+
 إذا رجعت نصًا عاديًا بدل JSON:
 سيتم استخدام النص نفسه.
 
-استخدم ready_to_search=true فقط إذا كان العميل يبحث عن عقار غير موجود ضمن عروض سدّين وعندك معلومات كافية للبحث.
+استخدم ready_to_search=true عندما يكون العميل يبحث عن عقار من العروض المتاحة في فهرس سدّين وعنده معيار واضح واحد على الأقل مثل:
+
+نوع العقار
+الغرض بيع أو إيجار
+الحي
+السعر
+عدد الغرف
+المساحة
+
+لا تشترط أن يذكر العميل كل المعايير.
+
+إذا قال العميل مثلًا:
+"أبي شقة للبيع"
+
+يمكن البحث مباشرة.
+
+إذا قال:
+"عندكم فلل للإيجار؟"
+
+يمكن البحث مباشرة.
+
+إذا قال:
+"أبي شقة 4 غرف في حدود 600 ألف"
+
+ابحث مباشرة.
+
+أما إذا كانت الرسالة مجرد تحية أو سؤال عام لا يمثل بحثًا عن عقار:
+ready_to_search=false.
 `;
 
 
@@ -1802,8 +1932,39 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 
 اعتمد فقط على نتائج البحث الموجودة أمامك.
 
+نتائج البحث تأتي من قاعدة بيانات عقارات سدّين الفعلية.
+
+ممنوع اختراع أي عقار أو معلومة.
+
 إذا وجدت عقارًا مناسبًا:
-اعرضه بشكل طبيعي.
+اعرضه بشكل طبيعي ومختصر.
+
+إذا وجدت أكثر من عقار:
+اعرض أفضل الخيارات بشكل واضح حتى يقدر العميل يختار.
+
+يمكن ذكر:
+نوع العقار.
+الحي.
+السعر.
+المساحة.
+عدد الغرف.
+عدد دورات المياه.
+الواجهة.
+عرض الشارع.
+حالة العقار.
+رقم إعلان بيوت.
+
+لكن اذكر فقط المعلومات الموجودة فعلًا في نتيجة البحث.
+
+لا تعرض:
+رقم الصك.
+الإحداثيات الدقيقة.
+بيانات داخلية.
+أي رقم هاتف مخزن في بيانات الإعلان.
+أي بريد إلكتروني.
+أي معلومات خاصة.
+
+لا ترسل رابط بيوت أو رابط هيئة العقار للعميل إلا إذا كانت هناك تعليمات صريحة تسمح بذلك.
 
 إذا العميل استمر يسأل عن نفس العقار:
 حافظ على سياق العقار.
@@ -1823,7 +1984,15 @@ const GROUNDED_REPLY_SYSTEM_PROMPT = `
 قناة واتساب.
 رابط تواصل.
 
+الكود الخارجي هو المسؤول عن بيانات التواصل.
+
 ممنوع اختراع أي معلومة.
+
+إذا لم توجد نتائج مطابقة:
+قل بشكل طبيعي إنه ما ظهر لك حاليًا عقار مطابق للمواصفات المطلوبة.
+
+لا تدّعي عدم وجود العقار نهائيًا في السوق.
+أنت تتحدث فقط عن عقارات سدّين الموجودة في نتائج البحث.
 
 رجع نصًا طبيعيًا مناسبًا للعميل.
 `;
@@ -2074,8 +2243,6 @@ ${description}`,
 
   return result.trim();
 }
-
-
 // =====================================================
 // إنشاء الرد الأساسي
 // =====================================================
@@ -2122,20 +2289,6 @@ async function generateReply(
     ) {
 
       return 'لا، العقار ليس عليه رهن أبدًا.';
-    }
-
-
-    // =================================================
-    // الإيجار
-    // =================================================
-
-    if (
-      customerAskedAboutRent(
-        userText
-      )
-    ) {
-
-      return 'أيوه موجود، وفيه معارض ومكاتب وعماير، وإن شاء الله أرسل لك المتوفر الآن 🌹';
     }
 
 
@@ -2220,7 +2373,7 @@ async function generateReply(
 
 
     // =================================================
-    // لا يحتاج بحث خارجي
+    // لا يحتاج بحث في قاعدة العقارات
     // =================================================
 
     if (
@@ -2265,13 +2418,22 @@ async function generateReply(
 
 
     // =================================================
-    // البحث في الفهرس
+    // البحث في PostgreSQL
+    // جدول bayut_properties
     // =================================================
 
     try {
 
+      console.log(
+        '🔎 البحث في عقارات بيوت:',
+        JSON.stringify(
+          criteria
+        )
+      );
+
+
       matches =
-        searchProperties({
+        await searchProperties({
 
           city:
             criteria.city ||
@@ -2289,17 +2451,49 @@ async function generateReply(
             criteria.purpose ||
             null,
 
+          min_price:
+            criteria.min_price ??
+            null,
+
+          max_price:
+            criteria.max_price ??
+            null,
+
+          min_area:
+            criteria.min_area ??
+            null,
+
+          max_area:
+            criteria.max_area ??
+            null,
+
+          rooms:
+            criteria.rooms ??
+            null,
+
+          min_rooms:
+            criteria.min_rooms ??
+            null,
+
+          max_rooms:
+            criteria.max_rooms ??
+            null,
+
           limit:
             5,
-
         }) || [];
+
+
+      console.log(
+        `🏠 عدد نتائج البحث: ${matches.length}`
+      );
 
     } catch (
       searchError
     ) {
 
       console.error(
-        'خطأ أثناء البحث:',
+        'خطأ أثناء البحث في عقارات بيوت:',
         searchError
       );
 
@@ -2309,47 +2503,290 @@ async function generateReply(
 
 
     // =================================================
-    // نتائج البحث
+    // تجهيز نتائج البحث بشكل آمن للعميل
     // =================================================
 
     const resultsContext =
       matches.length
 
-        ? `نتائج البحث المتاحة فعليًا:
+        ? `نتائج البحث المتاحة فعليًا من عقارات سدّين:
+
 ${matches
   .map(
-    (property) => {
+    (
+      property,
+      index
+    ) => {
 
       const title =
+        property.title_ar ||
         property.title ||
+        property.property_type_ar ||
         property.property_type ||
         'عقار';
 
 
+      const propertyType =
+        property.property_type_ar ||
+        property.property_type ||
+        null;
+
+
+      const purpose =
+        property.purpose_ar ||
+        property.purpose ||
+        null;
+
+
       const location =
-        `${property.city || ''} ${property.district || ''}`
-          .trim();
+        [
+          property.city,
+          property.district,
+        ]
+          .filter(Boolean)
+          .join(' - ');
+
+
+      const price =
+        property.price !== null &&
+        property.price !== undefined
+
+          ? `${Number(
+              property.price
+            ).toLocaleString(
+              'en-US'
+            )} ريال`
+
+          : null;
 
 
       const area =
-        property.area_sqm
+        property.area !== null &&
+        property.area !== undefined
 
-          ? `${property.area_sqm} م²`
+          ? `${property.area} م²`
 
-          : 'المساحة غير مذكورة';
-
-
-      const url =
-        property.url ||
-        'لا يوجد رابط';
+          : null;
 
 
-      return `- ${title} في ${location} — ${area} — ${url}`;
+      const rooms =
+        property.rooms !== null &&
+        property.rooms !== undefined
+
+          ? `${property.rooms} غرف`
+
+          : null;
+
+
+      const baths =
+        property.baths !== null &&
+        property.baths !== undefined &&
+        String(
+          property.baths
+        ).trim()
+
+          ? `${property.baths} دورات مياه`
+
+          : null;
+
+
+      const street =
+        property.street ||
+        null;
+
+
+      const streetWidth =
+        property.street_width !== null &&
+        property.street_width !== undefined &&
+        String(
+          property.street_width
+        ).trim()
+
+          ? `${property.street_width} متر`
+
+          : null;
+
+
+      const propertyFace =
+        property.property_face ||
+        null;
+
+
+      const propertyAge =
+        property.property_age !== null &&
+        property.property_age !== undefined &&
+        String(
+          property.property_age
+        ).trim()
+
+          ? String(
+              property.property_age
+            )
+
+          : null;
+
+
+      const furnished =
+        property.furnished !== null &&
+        property.furnished !== undefined &&
+        String(
+          property.furnished
+        ).trim()
+
+          ? String(
+              property.furnished
+            )
+
+          : null;
+
+
+      const residenceType =
+        property.residence_type ||
+        null;
+
+
+      const completionStatus =
+        property.completion_status ||
+        null;
+
+
+      const planNumber =
+        property.plan_number ||
+        null;
+
+
+      const landNumber =
+        property.land_number ||
+        null;
+
+
+      const notes =
+        property.notes ||
+        null;
+
+
+      const features =
+        Array.isArray(
+          property.features
+        )
+
+          ? property.features
+
+          : [];
+
+
+      const bayutId =
+        property.bayut_id ||
+        null;
+
+
+      const regaLicense =
+        property.rega_license ||
+        null;
+
+
+      const details = [
+
+        `النتيجة رقم: ${index + 1}`,
+
+        bayutId
+          ? `رقم إعلان بيوت: ${bayutId}`
+          : null,
+
+        regaLicense
+          ? `رخصة الإعلان: ${regaLicense}`
+          : null,
+
+        `العنوان: ${title}`,
+
+        propertyType
+          ? `نوع العقار: ${propertyType}`
+          : null,
+
+        purpose
+          ? `الغرض: ${purpose}`
+          : null,
+
+        location
+          ? `الموقع: ${location}`
+          : null,
+
+        price
+          ? `السعر: ${price}`
+          : null,
+
+        area
+          ? `المساحة: ${area}`
+          : null,
+
+        rooms
+          ? `عدد الغرف: ${rooms}`
+          : null,
+
+        baths
+          ? `دورات المياه: ${baths}`
+          : null,
+
+        street
+          ? `الشارع: ${street}`
+          : null,
+
+        streetWidth
+          ? `عرض الشارع: ${streetWidth}`
+          : null,
+
+        propertyFace
+          ? `الواجهة: ${propertyFace}`
+          : null,
+
+        propertyAge
+          ? `عمر العقار: ${propertyAge}`
+          : null,
+
+        furnished
+          ? `مفروش: ${furnished}`
+          : null,
+
+        residenceType
+          ? `نوع السكن: ${residenceType}`
+          : null,
+
+        completionStatus
+          ? `حالة العقار: ${completionStatus}`
+          : null,
+
+        planNumber
+          ? `رقم المخطط: ${planNumber}`
+          : null,
+
+        landNumber
+          ? `رقم القطعة: ${landNumber}`
+          : null,
+
+        notes
+          ? `ملاحظات الإعلان: ${notes}`
+          : null,
+
+        features.length
+          ? `المميزات: ${features.join(', ')}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+
+      return details;
     }
   )
-  .join('\n')}`
+  .join(
+    '\n\n-----------------------------\n\n'
+  )}`
 
-        : 'لا توجد نتائج مطابقة حاليًا في الفهرس.';
+        : `لا توجد نتائج مطابقة حاليًا في قاعدة عقارات سدّين للمعايير التالية:
+
+${JSON.stringify(
+  criteria
+)}`;
 
 
     // =================================================
@@ -2373,15 +2810,49 @@ ${matches
           'user',
 
         content:
-`[نتائج البحث الداخلية]
+`[نتائج البحث الداخلية من قاعدة عقارات سدّين]
 
 ${resultsContext}
 
 اكتب الرد النهائي للعميل بناءً على النتائج فقط.
 
-حافظ على سياق العقار الذي يتحدث عنه العميل.
+مهم جدًا:
 
-إذا سأل عن تفصيلة واحدة جاوب عنها فقط.`,
+لا تخترع أي عقار.
+
+لا تخترع أي معلومة غير موجودة في النتائج.
+
+لا تعرض رقم الصك.
+
+لا تعرض الإحداثيات.
+
+لا تعرض بيانات اتصال داخلية.
+
+لا تعرض بريدًا إلكترونيًا.
+
+لا تعرض رقم جوال موجودًا داخل بيانات الإعلان.
+
+لا ترسل رابط بيوت أو رابط هيئة العقار.
+
+إذا توجد عدة نتائج مناسبة:
+اعرضها بشكل مختصر وواضح حتى يقدر العميل يختار.
+
+يفضل لكل عقار عرض أهم المعلومات فقط مثل:
+النوع
+الحي
+السعر
+المساحة
+الغرف
+
+ويمكن ذكر رقم إعلان بيوت كمرجع للعقار.
+
+إذا سأل العميل عن عقار محدد من النتائج:
+جاوب من بيانات هذا العقار فقط.
+
+إذا سأل عن تفصيلة واحدة:
+جاوب عنها فقط.
+
+حافظ على سياق العقار الذي يتحدث عنه العميل.`,
       },
     ];
 
