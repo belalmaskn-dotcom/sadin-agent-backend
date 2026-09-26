@@ -1,28 +1,68 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// ==========================================
+// BAYUT SYNC - SADIN REAL ESTATE
+// ==========================================
+
+// إعلان واحد فقط للاختبار الأول
 const TEST_BAYUT_ID = "88101834";
 
+// تنظيف النصوص
 function clean(text = "") {
-  return text.replace(/\s+/g, " ").trim();
+  return String(text)
+    .replace(/\s+/g, " ")
+    .trim();
 }
+
+// البحث داخل نص الصفحة
+function findValue(pageText, patterns) {
+  for (const pattern of patterns) {
+    const match = pageText.match(pattern);
+
+    if (match && match[1]) {
+      return clean(match[1]);
+    }
+  }
+
+  return null;
+}
+
+// ==========================================
+// قراءة عقار واحد من Bayut
+// ==========================================
 
 async function fetchBayutProperty(bayutId) {
   const url = `https://www.bayut.sa/العقار/تفاصيل-${bayutId}.html`;
 
-  console.log(`\n🏠 Reading Bayut property: ${bayutId}`);
-  console.log(`🔗 ${url}\n`);
+  console.log("");
+  console.log("======================================");
+  console.log("🏠 Reading Bayut property");
+  console.log("Bayut ID:", bayutId);
+  console.log("URL:", url);
+  console.log("======================================");
+  console.log("");
 
   const response = await axios.get(url, {
     timeout: 30000,
+
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
-      "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+
+      "Accept-Language":
+        "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
+
       Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+
+      "Cache-Control": "no-cache",
+
+      Pragma: "no-cache",
     },
   });
+
+  console.log("HTTP Status:", response.status);
 
   const $ = cheerio.load(response.data);
 
@@ -30,127 +70,193 @@ async function fetchBayutProperty(bayutId) {
 
   const title = clean($("h1").first().text());
 
-  function match(pattern) {
-    const result = pageText.match(pattern);
-    return result ? clean(result[1]) : null;
-  }
+  // ==========================================
+  // استخراج البيانات
+  // ==========================================
 
   const property = {
     bayut_id: bayutId,
 
-    url,
+    url: url,
 
-    title,
+    title: title || null,
 
-    price:
-      match(/السعر\s+([\d,.]+)/) ||
-      match(/([\d,.]+)\s*ريال سعودي/),
+    price: findValue(pageText, [
+      /السعر\s*([\d,.]+)/i,
+      /([\d,.]+)\s*ريال/i,
+    ]),
 
-    property_type:
-      match(/نوع العقار\s+(.+?)\s+نوع العرض/),
+    property_type: findValue(pageText, [
+      /نوع العقار\s*(.+?)\s*نوع العرض/i,
+      /نوع العقار\s*(.+?)\s*الغرض/i,
+    ]),
 
-    purpose:
-      match(/نوع العرض\s+(.+?)\s+رقم بيوت المرجعي/),
+    purpose: findValue(pageText, [
+      /نوع العرض\s*(.+?)\s*رقم بيوت/i,
+      /الغرض\s*(.+?)\s*نوع/i,
+    ]),
 
-    residence_type:
-      match(/نوع السكن\s+(.+?)\s+حالة البناء/),
+    residence_type: findValue(pageText, [
+      /نوع السكن\s*(.+?)\s*حالة البناء/i,
+    ]),
 
-    construction_status:
-      match(/حالة البناء\s+(.+?)\s+التأثيث/),
+    construction_status: findValue(pageText, [
+      /حالة البناء\s*(.+?)\s*التأثيث/i,
+    ]),
 
-    furnished:
-      match(/التأثيث\s+(.+?)\s+تاريخ الإضافة/),
+    furnished: findValue(pageText, [
+      /التأثيث\s*(.+?)\s*تاريخ/i,
+    ]),
 
-    property_age:
-      match(/عمر العقار\s+(.+?)\s+(?:المزايا والخدمات|عرض الشارع)/),
+    property_age: findValue(pageText, [
+      /عمر العقار\s*(.+?)\s*عرض الشارع/i,
+      /عمر العقار\s*(.+?)\s*المزايا/i,
+    ]),
 
-    region:
-      match(/المنطقة\s+(.+?)\s+المدينة/),
+    region: findValue(pageText, [
+      /المنطقة\s*(.+?)\s*المدينة/i,
+    ]),
 
-    city:
-      match(/المدينة\s+(.+?)\s+الحي/),
+    city: findValue(pageText, [
+      /المدينة\s*(.+?)\s*الحي/i,
+    ]),
 
-    district:
-      match(/الحي\s+(.+?)\s+اسم الشارع/),
+    district: findValue(pageText, [
+      /الحي\s*(.+?)\s*اسم الشارع/i,
+    ]),
 
-    street:
-      match(/اسم الشارع\s+(.+?)\s+الرمز البريدي/),
+    street: findValue(pageText, [
+      /اسم الشارع\s*(.+?)\s*الرمز البريدي/i,
+    ]),
 
-    postal_code:
-      match(/الرمز البريدي\s+(\d+)/),
+    postal_code: findValue(pageText, [
+      /الرمز البريدي\s*(\d+)/i,
+    ]),
 
-    building_number:
-      match(/رقم المبنى\s+(\d+)/),
+    building_number: findValue(pageText, [
+      /رقم المبنى\s*(\d+)/i,
+    ]),
 
-    latitude:
-      match(/خط العرض\s+([\d.]+)/),
+    area: findValue(pageText, [
+      /المساحة\s*([\d,.]+)/i,
+      /([\d,.]+)\s*م²/i,
+      /([\d,.]+)\s*متر مربع/i,
+    ]),
 
-    longitude:
-      match(/خط الطول\s+([\d.]+)/),
+    rooms: findValue(pageText, [
+      /عدد الغرف\s*(\d+)/i,
+      /الغرف\s*(\d+)/i,
+    ]),
 
-    official_price:
-      match(/تفاصيل العقار\s+نوع الإعلان.+?السعر\s+([\d,.]+)/),
+    bathrooms: findValue(pageText, [
+      /عدد دورات المياه\s*(\d+)/i,
+      /دورات المياه\s*(\d+)/i,
+      /الحمامات\s*(\d+)/i,
+    ]),
 
-    area:
-      match(/المساحة\s+([\d.]+)/),
+    street_width: findValue(pageText, [
+      /عرض الشارع\s*([\d,.]+)/i,
+    ]),
 
-    rooms:
-      match(/عدد الغرف\s+(\d+)/),
+    plan_number: findValue(pageText, [
+      /رقم المخطط\s*(.+?)\s*رقم/i,
+    ]),
 
-    street_width:
-      match(/عرض الشارع\s+([\d.]+)/),
+    land_number: findValue(pageText, [
+      /رقم الأرض\s*(.+?)\s*ملاحظات/i,
+    ]),
 
-    plan_number:
-      match(/رقم المخطط\s+(.+?)\s+رقم صك الملكية/),
+    deed_number: findValue(pageText, [
+      /رقم صك الملكية\s*(.+?)\s*واجهة العقار/i,
+    ]),
 
-    land_number:
-      match(/رقم الأرض\s+(.+?)\s+ملاحظات/),
+    facade: findValue(pageText, [
+      /واجهة العقار\s*(.+?)\s*حدود/i,
+    ]),
 
-    deed_number:
-      match(/رقم صك الملكية\s+(.+?)\s+واجهة العقار/),
+    rega_license: findValue(pageText, [
+      /رقم ترخيص الإعلان\s*(\d+)/i,
+      /رقم رخصة الإعلان\s*(\d+)/i,
+      /REGA\s*(?:Ad\s*)?License\s*(?:Number)?\s*:?\s*(\d+)/i,
+    ]),
 
-    facade:
-      match(/واجهة العقار\s*(.*?)\s+حدود واطوال العقار/),
-
-    mortgage:
-      match(/العقار مرهون\s+(.+?)\s+العقار مقيد/),
-
-    notes:
-      match(/ملاحظات\s*(.+?)\s+حدود العقار\/الملكية/),
-
-    fal_license:
-      match(/رقم رخصة فال\s+(\d+)/),
+    fal_license: findValue(pageText, [
+      /رقم رخصة فال\s*(\d+)/i,
+    ]),
   };
 
-  console.log("====================================");
-  console.log("✅ BAYUT PROPERTY READ SUCCESSFULLY");
-  console.log("====================================");
+  // ==========================================
+  // النتيجة
+  // ==========================================
+
+  console.log("");
+  console.log("======================================");
+  console.log("✅ BAYUT PROPERTY RESULT");
+  console.log("======================================");
 
   console.log(JSON.stringify(property, null, 2));
+
+  console.log("");
+  console.log("======================================");
 
   return property;
 }
 
+// ==========================================
+// تشغيل الاختبار
+// ==========================================
+
 async function main() {
   try {
-    await fetchBayutProperty(TEST_BAYUT_ID);
+    const property = await fetchBayutProperty(
+      TEST_BAYUT_ID
+    );
 
-    console.log("\n✅ Test completed.");
+    if (!property) {
+      throw new Error(
+        "No property data returned."
+      );
+    }
+
+    console.log("");
+    console.log("✅ Test completed successfully.");
+    console.log("");
   } catch (error) {
-    console.error("\n❌ Bayut test failed.");
+    console.error("");
+    console.error("❌ Bayut test failed.");
 
     if (error.response) {
-      console.error("Status:", error.response.status);
-      console.error("Status Text:", error.response.statusText);
-    } else {
-      console.error(error.message);
+      console.error(
+        "HTTP Status:",
+        error.response.status
+      );
+
+      console.error(
+        "Status Text:",
+        error.response.statusText
+      );
     }
+
+    console.error(
+      "Error:",
+      error.message
+    );
+
+    console.error("");
 
     process.exitCode = 1;
   }
 }
 
-main();
+// تشغيل الملف فقط لو تم تشغيله مباشرة
+if (require.main === module) {
+  main();
+}
+
+// ==========================================
+// EXPORTS
+// ==========================================
 
 module.exports = {
   fetchBayutProperty,
+};
