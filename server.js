@@ -66,6 +66,45 @@ const CONTACT_NUMBER =
 
 
 // =====================================================
+// إعدادات الرسائل الجماعية (Broadcast)
+// =====================================================
+
+const BROADCAST_PASSWORD =
+  process.env.BROADCAST_PASSWORD ||
+  '';
+
+const BROADCAST_TEMPLATE_NAME =
+  process.env.BROADCAST_TEMPLATE_NAME ||
+  'sadin_property_offer';
+
+const BROADCAST_TEMPLATE_LANG =
+  process.env.BROADCAST_TEMPLATE_LANG ||
+  'ar';
+
+// أقصى عدد أرقام في المرة الواحدة
+const BROADCAST_MAX_PER_RUN = 250;
+
+// فاصل بين كل رسالة والتانية (بالملي ثانية)
+const BROADCAST_DELAY_MS = 1500;
+
+// الاسم اللي يتحط لو العميل ملوش اسم في القائمة
+const BROADCAST_DEFAULT_NAME = 'عميلنا الكريم';
+
+// نسخة من نص القالب (لازم تكون نفس النص المعتمد في ميتا)
+// بتتحفظ في سجل المحادثة عشان البوت يفهم العميل بيرد على إيه
+const BROADCAST_TEMPLATE_PREVIEW =
+`أهلاً {{1}} 👋
+
+✨ *شقق تمليك فاخرة* ✨
+
+🕌 بجوار المسجد النبوي الشريف
+🏙️ في أرقى أحياء المدينة المنورة
+
+تحب نرسل لك التفاصيل والأسعار؟
+رد على هذه الرسالة ويساعدك مستشارنا فورًا 🌿`;
+
+
+// =====================================================
 // PostgreSQL
 // =====================================================
 
@@ -145,6 +184,27 @@ async function initializeDatabase() {
       status VARCHAR(30) DEFAULT 'active',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS opt_outs (
+      customer_phone VARCHAR(30) PRIMARY KEY,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broadcast_log (
+      id SERIAL PRIMARY KEY,
+      customer_phone VARCHAR(30) NOT NULL,
+      customer_name TEXT,
+      template_name VARCHAR(100),
+      status VARCHAR(30),
+      error TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
@@ -2359,6 +2419,49 @@ async function processCustomerMessage(
   }
 
 
+  // =================================================
+  // طلب إيقاف الرسائل الترويجية
+  // =================================================
+
+  if (
+    isOptOutMessage(
+      userText
+    )
+  ) {
+
+    await saveOptOut(
+      from
+    );
+
+
+    const reply =
+      'تم إيقاف الرسائل الترويجية ✅ ما راح نرسل لك عروض مرة ثانية. ولو احتجت أي شي، راسلنا في أي وقت 🌹';
+
+
+    await saveConversation(
+      from,
+      'user',
+      userText
+    );
+
+
+    await sendWhatsAppText(
+      from,
+      reply
+    );
+
+
+    await saveConversation(
+      from,
+      'assistant',
+      reply
+    );
+
+
+    return;
+  }
+
+
   console.log(
     `${incoming.type} from ${from}:`,
     userText
@@ -2615,6 +2718,797 @@ app.post(
     }
   }
 );
+
+
+// =====================================================
+// الرسائل الجماعية (Broadcast)
+// =====================================================
+
+// تحويل الرقم السعودي للصيغة الدولية
+// 0551234567  → 966551234567
+// 551234567   → 966551234567
+// +966551234567 / 00966551234567 → 966551234567
+
+function normalizeSaudiPhone(
+  phone
+) {
+
+  let digits =
+    normalizePhone(
+      phone
+    );
+
+
+  if (
+    digits.startsWith('00')
+  ) {
+
+    digits =
+      digits.slice(2);
+  }
+
+
+  if (
+    digits.startsWith('05') &&
+    digits.length === 10
+  ) {
+
+    digits =
+      '966' + digits.slice(1);
+  }
+
+
+  if (
+    digits.startsWith('5') &&
+    digits.length === 9
+  ) {
+
+    digits =
+      '966' + digits;
+  }
+
+
+  // رقم سعودي جوال صحيح: 9665 + 8 أرقام
+  if (
+    /^9665\d{8}$/.test(digits)
+  ) {
+
+    return digits;
+  }
+
+
+  // أرقام دولية أخرى (10 إلى 15 رقم)
+  if (
+    /^\d{10,15}$/.test(digits) &&
+    !digits.startsWith('0')
+  ) {
+
+    return digits;
+  }
+
+
+  return null;
+}
+
+
+function isOptOutMessage(
+  text
+) {
+
+  const value =
+    String(
+      text || ''
+    )
+      .trim()
+      .toLowerCase();
+
+
+  return [
+    'إيقاف',
+    'ايقاف',
+    'أيقاف',
+    'إلغاء',
+    'الغاء',
+    'stop',
+    'unsubscribe',
+  ].includes(
+    value
+  );
+}
+
+
+async function saveOptOut(
+  customerPhone
+) {
+
+  try {
+
+    await pool.query(
+      `
+      INSERT INTO opt_outs (customer_phone)
+      VALUES ($1)
+      ON CONFLICT (customer_phone) DO NOTHING
+      `,
+      [
+        normalizePhone(
+          customerPhone
+        ),
+      ]
+    );
+
+  } catch (err) {
+
+    console.error(
+      'Save opt-out error:',
+      err
+    );
+  }
+}
+
+
+async function getOptedOutSet() {
+
+  try {
+
+    const result =
+      await pool.query(
+        'SELECT customer_phone FROM opt_outs'
+      );
+
+
+    return new Set(
+      result.rows.map(
+        (row) =>
+          row.customer_phone
+      )
+    );
+
+  } catch (err) {
+
+    console.error(
+      'Get opt-outs error:',
+      err
+    );
+
+
+    return new Set();
+  }
+}
+
+
+// إرسال قالب واتساب معتمد لرقم واحد
+
+async function sendWhatsAppTemplate(
+  to,
+  customerName
+) {
+
+  if (
+    !WHATSAPP_TOKEN ||
+    !PHONE_NUMBER_ID
+  ) {
+
+    return {
+      ok: false,
+      error: 'WhatsApp credentials missing',
+    };
+  }
+
+
+  try {
+
+    const response =
+      await axios.post(
+
+        `https://graph.facebook.com/v23.0/${PHONE_NUMBER_ID}/messages`,
+
+        {
+          messaging_product:
+            'whatsapp',
+
+          recipient_type:
+            'individual',
+
+          to,
+
+          type:
+            'template',
+
+          template: {
+            name:
+              BROADCAST_TEMPLATE_NAME,
+
+            language: {
+              code:
+                BROADCAST_TEMPLATE_LANG,
+            },
+
+            components: [
+              {
+                type:
+                  'body',
+
+                parameters: [
+                  {
+                    type:
+                      'text',
+
+                    text:
+                      customerName,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+
+        {
+          headers: {
+            Authorization:
+              `Bearer ${WHATSAPP_TOKEN}`,
+
+            'Content-Type':
+              'application/json',
+          },
+
+          timeout:
+            30000,
+        }
+      );
+
+
+    return {
+      ok: true,
+      messageId:
+        response.data?.messages?.[0]?.id ||
+        null,
+    };
+
+  } catch (err) {
+
+    const details =
+      err.response?.data?.error;
+
+
+    const errorText =
+      details
+        ? `${details.code || ''} ${details.message || ''} ${details.error_data?.details || ''}`.trim()
+        : err.message;
+
+
+    console.error(
+      'WhatsApp send template error:',
+      JSON.stringify(
+        err.response?.data ||
+          err.message,
+        null,
+        2
+      )
+    );
+
+
+    return {
+      ok: false,
+      error: errorText,
+    };
+  }
+}
+
+
+// قراءة القائمة: كل سطر = رقم، وممكن بعده اسم
+// أمثلة:
+// 0551234567
+// 0551234567, محمد
+// 966551234567 - أحمد
+
+function parseBroadcastList(
+  rawText
+) {
+
+  const lines =
+    String(
+      rawText || ''
+    )
+      .split(/\r?\n/)
+      .map(
+        (line) =>
+          line.trim()
+      )
+      .filter(Boolean);
+
+
+  const valid = [];
+
+  const invalid = [];
+
+  const seen = new Set();
+
+
+  for (
+    const line
+    of lines
+  ) {
+
+    const match =
+      line.match(
+        /^([+\d\s\-()]+?)\s*(?:[,،;\-|\t]\s*(.*))?$/
+      );
+
+
+    const phonePart =
+      match
+        ? match[1]
+        : line;
+
+
+    const namePart =
+      match && match[2]
+        ? match[2].trim()
+        : '';
+
+
+    const phone =
+      normalizeSaudiPhone(
+        phonePart
+      );
+
+
+    if (!phone) {
+
+      invalid.push(
+        line
+      );
+
+      continue;
+    }
+
+
+    if (
+      seen.has(phone)
+    ) {
+
+      continue;
+    }
+
+
+    seen.add(
+      phone
+    );
+
+
+    valid.push({
+      phone,
+      name:
+        namePart.slice(0, 60) ||
+        BROADCAST_DEFAULT_NAME,
+    });
+  }
+
+
+  return {
+    valid,
+    invalid,
+  };
+}
+
+
+function sleep(
+  ms
+) {
+
+  return new Promise(
+    (resolve) =>
+      setTimeout(
+        resolve,
+        ms
+      )
+  );
+}
+
+
+// حالة الإرسال الحالي (عشان الصفحة تعرض التقدم)
+
+const broadcastState = {
+  running: false,
+  total: 0,
+  sent: 0,
+  failed: 0,
+  skippedOptOut: 0,
+  invalid: [],
+  errors: [],
+  startedAt: null,
+  finishedAt: null,
+};
+
+
+async function runBroadcast(
+  recipients
+) {
+
+  broadcastState.running = true;
+
+
+  for (
+    const recipient
+    of recipients
+  ) {
+
+    const result =
+      await sendWhatsAppTemplate(
+        recipient.phone,
+        recipient.name
+      );
+
+
+    try {
+
+      await pool.query(
+        `
+        INSERT INTO broadcast_log
+        (customer_phone, customer_name, template_name, status, error)
+        VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          recipient.phone,
+          recipient.name,
+          BROADCAST_TEMPLATE_NAME,
+          result.ok ? 'sent' : 'failed',
+          result.ok ? null : result.error,
+        ]
+      );
+
+    } catch (err) {
+
+      console.error(
+        'Broadcast log error:',
+        err
+      );
+    }
+
+
+    if (
+      result.ok
+    ) {
+
+      broadcastState.sent++;
+
+
+      // نحفظ الرسالة في سجل المحادثة
+      // عشان لما العميل يرد، البوت يعرف هو بيرد على إيه
+
+      await saveConversation(
+        recipient.phone,
+        'assistant',
+        BROADCAST_TEMPLATE_PREVIEW.replace(
+          '{{1}}',
+          recipient.name
+        )
+      );
+
+    } else {
+
+      broadcastState.failed++;
+
+
+      if (
+        broadcastState.errors.length < 50
+      ) {
+
+        broadcastState.errors.push(
+          `${recipient.phone}: ${result.error}`
+        );
+      }
+    }
+
+
+    await sleep(
+      BROADCAST_DELAY_MS
+    );
+  }
+
+
+  broadcastState.running = false;
+
+  broadcastState.finishedAt =
+    new Date().toISOString();
+
+
+  console.log(
+    `Broadcast finished: sent ${broadcastState.sent}, failed ${broadcastState.failed}`
+  );
+}
+
+
+function checkBroadcastPassword(
+  req
+) {
+
+  const given =
+    String(
+      req.headers['x-broadcast-password'] ||
+      ''
+    );
+
+
+  return (
+    BROADCAST_PASSWORD.length >= 6 &&
+    given === BROADCAST_PASSWORD
+  );
+}
+
+
+// صفحة الإرسال
+
+app.get(
+  '/broadcast',
+  (req, res) => {
+
+    res
+      .status(200)
+      .type('html')
+      .send(BROADCAST_PAGE_HTML);
+  }
+);
+
+
+// بدء الإرسال
+
+app.post(
+  '/api/broadcast',
+  async (req, res) => {
+
+    if (
+      !checkBroadcastPassword(
+        req
+      )
+    ) {
+
+      return res
+        .status(401)
+        .json({
+          error:
+            'كلمة السر غلط (أو لسه ما اتضافتش في Render)',
+        });
+    }
+
+
+    if (
+      broadcastState.running
+    ) {
+
+      return res
+        .status(409)
+        .json({
+          error:
+            'فيه إرسال شغال حاليًا، استنى لما يخلص',
+        });
+    }
+
+
+    const {
+      valid,
+      invalid,
+    } =
+      parseBroadcastList(
+        req.body?.numbers
+      );
+
+
+    const optedOut =
+      await getOptedOutSet();
+
+
+    const recipients =
+      valid.filter(
+        (r) =>
+          !optedOut.has(
+            r.phone
+          )
+      );
+
+
+    const skippedOptOut =
+      valid.length -
+      recipients.length;
+
+
+    if (
+      !recipients.length
+    ) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            'مفيش أرقام صالحة للإرسال',
+          invalid,
+          skippedOptOut,
+        });
+    }
+
+
+    if (
+      recipients.length >
+      BROADCAST_MAX_PER_RUN
+    ) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            `الحد الأقصى ${BROADCAST_MAX_PER_RUN} رقم في المرة الواحدة. القائمة فيها ${recipients.length}`,
+        });
+    }
+
+
+    Object.assign(
+      broadcastState,
+      {
+        running: true,
+        total: recipients.length,
+        sent: 0,
+        failed: 0,
+        skippedOptOut,
+        invalid,
+        errors: [],
+        startedAt:
+          new Date().toISOString(),
+        finishedAt: null,
+      }
+    );
+
+
+    // نشتغل في الخلفية ونرد على الصفحة فورًا
+
+    runBroadcast(
+      recipients
+    ).catch(
+      (err) => {
+
+        console.error(
+          'Broadcast run error:',
+          err
+        );
+
+        broadcastState.running = false;
+      }
+    );
+
+
+    return res.json({
+      ok: true,
+      state: broadcastState,
+    });
+  }
+);
+
+
+// متابعة حالة الإرسال
+
+app.get(
+  '/api/broadcast/status',
+  (req, res) => {
+
+    if (
+      !checkBroadcastPassword(
+        req
+      )
+    ) {
+
+      return res
+        .status(401)
+        .json({
+          error:
+            'كلمة السر غلط',
+        });
+    }
+
+
+    return res.json(
+      broadcastState
+    );
+  }
+);
+
+
+const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إرسال جماعي - سدين</title>
+<style>
+  body { font-family: Tahoma, Arial, sans-serif; background:#f4f1ea; margin:0; padding:20px; color:#222; }
+  .box { max-width:640px; margin:0 auto; background:#fff; border-radius:14px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,.08); }
+  h1 { margin-top:0; font-size:22px; color:#7a5c1e; }
+  label { display:block; margin:16px 0 6px; font-weight:bold; }
+  input, textarea { width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:8px; font-size:16px; font-family:inherit; }
+  textarea { min-height:220px; direction:ltr; text-align:right; }
+  button { margin-top:18px; width:100%; padding:14px; font-size:18px; background:#7a5c1e; color:#fff; border:none; border-radius:10px; cursor:pointer; }
+  button:disabled { background:#aaa; }
+  .hint { color:#666; font-size:14px; }
+  #status { margin-top:20px; white-space:pre-wrap; background:#faf7f0; padding:14px; border-radius:8px; display:none; line-height:1.8; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>📤 إرسال رسالة العروض لقائمة أرقام</h1>
+  <p class="hint">القالب: <b>${BROADCAST_TEMPLATE_NAME}</b> — ابعت بس لعملاء موافقين يستقبلوا رسايل منك.</p>
+
+  <label>كلمة السر</label>
+  <input id="pw" type="password" autocomplete="off">
+
+  <label>الأرقام (كل رقم في سطر، وممكن بعده فاصلة واسم العميل)</label>
+  <textarea id="nums" placeholder="0551234567, محمد&#10;0559876543, أحمد&#10;0501112233"></textarea>
+  <p class="hint">لو مكتبتش اسم، هيتكتب: ${BROADCAST_DEFAULT_NAME}</p>
+
+  <button id="btn" onclick="startSend()">إرسال</button>
+
+  <div id="status"></div>
+</div>
+
+<script>
+  const statusBox = document.getElementById('status');
+  const btn = document.getElementById('btn');
+  let timer = null;
+
+  function show(text) {
+    statusBox.style.display = 'block';
+    statusBox.textContent = text;
+  }
+
+  function render(s) {
+    let t = s.running ? '⏳ جاري الإرسال...\\n\\n' : '✅ خلص الإرسال\\n\\n';
+    t += 'الإجمالي: ' + s.total + '\\n';
+    t += 'اتبعت: ' + s.sent + '\\n';
+    t += 'فشل: ' + s.failed + '\\n';
+    t += 'اتشال (طلبوا إيقاف): ' + s.skippedOptOut + '\\n';
+    if (s.invalid && s.invalid.length) t += '\\nأرقام غلط اتجاهلت:\\n' + s.invalid.join('\\n') + '\\n';
+    if (s.errors && s.errors.length) t += '\\nأخطاء:\\n' + s.errors.join('\\n');
+    show(t);
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/broadcast/status', { headers: { 'x-broadcast-password': document.getElementById('pw').value } });
+      const s = await r.json();
+      render(s);
+      if (!s.running) { clearInterval(timer); btn.disabled = false; }
+    } catch (e) {}
+  }
+
+  async function startSend() {
+    const nums = document.getElementById('nums').value.trim();
+    if (!nums) { show('اكتب الأرقام الأول'); return; }
+    const count = nums.split('\\n').filter(l => l.trim()).length;
+    if (!confirm('هتبعت الرسالة لـ ' + count + ' رقم. متأكد؟')) return;
+
+    btn.disabled = true;
+    show('⏳ بنبدأ...');
+    try {
+      const r = await fetch('/api/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-broadcast-password': document.getElementById('pw').value },
+        body: JSON.stringify({ numbers: nums })
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        let t = '❌ ' + (data.error || 'حصل خطأ');
+        if (data.invalid && data.invalid.length) t += '\\n\\nأرقام غلط:\\n' + data.invalid.join('\\n');
+        show(t);
+        btn.disabled = false;
+        return;
+      }
+      render(data.state);
+      timer = setInterval(poll, 3000);
+    } catch (e) {
+      show('❌ مقدرتش أوصل للسيرفر: ' + e.message);
+      btn.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>`;
 
 
 // =====================================================
