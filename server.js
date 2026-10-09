@@ -2677,6 +2677,34 @@ app.post(
             change.value;
 
 
+          const statuses =
+            value?.statuses ||
+            [];
+
+
+          for (
+            const status
+            of statuses
+          ) {
+
+            try {
+
+              handleMessageStatus(
+                status
+              );
+
+            } catch (
+              statusError
+            ) {
+
+              console.error(
+                'Status handling error:',
+                statusError
+              );
+            }
+          }
+
+
           const messages =
             value?.messages ||
             [];
@@ -3118,6 +3146,9 @@ const broadcastState = {
   errors: [],
   startedAt: null,
   finishedAt: null,
+  delivered: 0,
+  read: 0,
+  deliveryErrors: [],
 };
 
 
@@ -3354,6 +3385,9 @@ app.post(
         startedAt:
           new Date().toISOString(),
         finishedAt: null,
+        delivered: 0,
+        read: 0,
+        deliveryErrors: [],
       }
     );
 
@@ -3463,6 +3497,9 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
     t += 'اتبعت: ' + s.sent + '\\n';
     t += 'فشل: ' + s.failed + '\\n';
     t += 'اتشال (طلبوا إيقاف): ' + s.skippedOptOut + '\\n';
+    t += '\\nوصلت للعميل: ' + (s.delivered || 0) + '\\n';
+    t += 'اتقرت: ' + (s.read || 0) + '\\n';
+    if (s.deliveryErrors && s.deliveryErrors.length) t += '\\n❌ ميتا موقفة رسايل:\\n' + s.deliveryErrors.join('\\n') + '\\n';
     if (s.invalid && s.invalid.length) t += '\\nأرقام غلط اتجاهلت:\\n' + s.invalid.join('\\n') + '\\n';
     if (s.errors && s.errors.length) t += '\\nأخطاء:\\n' + s.errors.join('\\n');
     show(t);
@@ -3473,7 +3510,7 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
       const r = await fetch('/api/broadcast/status', { headers: { 'x-broadcast-password': document.getElementById('pw').value } });
       const s = await r.json();
       render(s);
-      if (!s.running) { clearInterval(timer); btn.disabled = false; }
+      if (!s.running) { btn.disabled = false; }
     } catch (e) {}
   }
 
@@ -3500,7 +3537,8 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
         return;
       }
       render(data.state);
-      timer = setInterval(poll, 3000);
+      if (timer) clearInterval(timer);
+      timer = setInterval(poll, 4000);
     } catch (e) {
       show('❌ مقدرتش أوصل للسيرفر: ' + e.message);
       btn.disabled = false;
@@ -3509,6 +3547,102 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
 </script>
 </body>
 </html>`;
+
+
+// =====================================================
+// متابعة حالة توصيل الرسائل (من ميتا)
+// =====================================================
+
+function handleMessageStatus(
+  status
+) {
+
+  if (
+    !status
+  ) {
+
+    return;
+  }
+
+
+  if (
+    status.status ===
+    'delivered'
+  ) {
+
+    broadcastState.delivered++;
+  }
+
+
+  if (
+    status.status ===
+    'read'
+  ) {
+
+    broadcastState.read++;
+  }
+
+
+  if (
+    status.status ===
+    'failed'
+  ) {
+
+    const errors =
+      (status.errors || [])
+        .map(
+          (e) =>
+            `${e.code || ''} ${e.title || ''} ${e.error_data?.details || e.message || ''}`.trim()
+        )
+        .join(' | ');
+
+
+    const line =
+      `${status.recipient_id}: ${errors || 'فشل بدون سبب واضح'}`;
+
+
+    console.error(
+      'WhatsApp delivery failed:',
+      line
+    );
+
+
+    if (
+      broadcastState.deliveryErrors.length < 50
+    ) {
+
+      broadcastState.deliveryErrors.push(
+        line
+      );
+    }
+
+
+    pool.query(
+      `
+      UPDATE broadcast_log
+      SET status = 'not_delivered', error = $1
+      WHERE id = (
+        SELECT id FROM broadcast_log
+        WHERE customer_phone = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      `,
+      [
+        errors,
+        normalizePhone(
+          status.recipient_id
+        ),
+      ]
+    ).catch(
+      (err) =>
+        console.error(
+          'Update broadcast log error:',
+          err
+        )
+    );
+  }
+}
 
 
 // =====================================================
