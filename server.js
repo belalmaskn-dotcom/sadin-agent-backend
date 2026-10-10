@@ -3579,6 +3579,11 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
   const btn = document.getElementById('btn');
   let timer = null;
 
+  try {
+    const saved = localStorage.getItem('sadin_pw');
+    if (saved) document.getElementById('pw').value = saved;
+  } catch (e) {}
+
   function show(text) {
     statusBox.style.display = 'block';
     statusBox.textContent = text;
@@ -3622,6 +3627,8 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
         body: JSON.stringify({ numbers: nums })
       });
       const data = await r.json();
+      if (r.status === 401) { try { localStorage.removeItem('sadin_pw'); } catch (e) {} }
+      if (r.ok) { try { localStorage.setItem('sadin_pw', document.getElementById('pw').value); } catch (e) {} }
       if (!r.ok) {
         let t = '❌ ' + (data.error || 'حصل خطأ');
         if (data.invalid && data.invalid.length) t += '\\n\\nأرقام غلط:\\n' + data.invalid.join('\\n');
@@ -3988,6 +3995,10 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
   .card { background:#fff; border-radius:12px; padding:14px; box-shadow:0 1px 6px rgba(0,0,0,.06); text-align:center; }
   .card b { display:block; font-size:28px; margin-top:4px; }
   .card span { color:#666; font-size:14px; }
+  .card { cursor:pointer; transition:transform .1s; border:2px solid transparent; }
+  .card:hover { transform:translateY(-2px); }
+  .card.active { border-color:#7a5c1e; background:#fffaf0; }
+  .logout { background:none; color:#999; border:none; font-size:13px; text-decoration:underline; padding:4px; }
   .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
   .tablebox { background:#fff; border-radius:12px; overflow-x:auto; box-shadow:0 1px 6px rgba(0,0,0,.06); }
   table { width:100%; border-collapse:collapse; min-width:820px; }
@@ -4023,23 +4034,26 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
     <div class="login">
       <input id="pw" type="password" placeholder="كلمة السر" autocomplete="off">
       <button onclick="load()">عرض</button>
+      <button class="logout" onclick="logout()">خروج</button>
     </div>
   </div>
 
   <div id="msg"></div>
 
   <div class="cards">
-    <div class="card"><span>اتبعتت</span><b id="c-sent">–</b></div>
-    <div class="card"><span>وصلت</span><b id="c-delivered">–</b></div>
-    <div class="card"><span>اتقرت</span><b id="c-read">–</b></div>
-    <div class="card"><span>ردّوا</span><b id="c-replied">–</b></div>
-    <div class="card"><span>طلبوا إيقاف</span><b id="c-stop">–</b></div>
-    <div class="card"><span>فشلت</span><b id="c-failed">–</b></div>
+    <div class="card" data-f="all" onclick="setFilter('all')"><span>اتبعتت</span><b id="c-sent">–</b></div>
+    <div class="card" data-f="delivered" onclick="setFilter('delivered')"><span>وصلت</span><b id="c-delivered">–</b></div>
+    <div class="card" data-f="read" onclick="setFilter('read')"><span>اتقرت</span><b id="c-read">–</b></div>
+    <div class="card" data-f="replied" onclick="setFilter('replied')"><span>ردّوا</span><b id="c-replied">–</b></div>
+    <div class="card" data-f="stop" onclick="setFilter('stop')"><span>طلبوا إيقاف</span><b id="c-stop">–</b></div>
+    <div class="card" data-f="failed" onclick="setFilter('failed')"><span>فشلت</span><b id="c-failed">–</b></div>
   </div>
 
   <div class="filters">
     <select id="filter" onchange="render()">
       <option value="all">الكل</option>
+      <option value="delivered">اللي وصلتهم</option>
+      <option value="read">اللي قروها</option>
       <option value="replied">اللي ردّوا بس</option>
       <option value="noreply">اللي ما ردّوش</option>
       <option value="failed">اللي فشلت</option>
@@ -4105,7 +4119,12 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
     try {
       const r = await fetch('/api/dashboard', { headers: { 'x-broadcast-password': pw() } });
       const j = await r.json();
-      if (!r.ok) { m.textContent = '❌ ' + (j.error || 'حصل خطأ'); return; }
+      if (!r.ok) {
+        m.textContent = '❌ ' + (j.error || 'حصل خطأ');
+        if (r.status === 401) { try { localStorage.removeItem('sadin_pw'); } catch (e) {} }
+        return;
+      }
+      try { localStorage.setItem('sadin_pw', pw()); } catch (e) {}
       data = j.rows || [];
       render();
     } catch (e) {
@@ -4126,11 +4145,25 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
     document.getElementById('c-failed').textContent = data.filter(failed).length;
 
     let list = data;
+    if (f === 'all') list = list.filter(r => !failed(r));
+    if (f === 'delivered') list = list.filter(r => r.status === 'delivered' || r.status === 'read');
+    if (f === 'read') list = list.filter(r => r.status === 'read');
     if (f === 'replied') list = list.filter(r => r.reply_count > 0);
     if (f === 'noreply') list = list.filter(r => r.reply_count === 0 && !failed(r));
     if (f === 'failed') list = list.filter(failed);
     if (f === 'stop') list = list.filter(r => r.opted_out);
     if (q) list = list.filter(r => (r.customer_name || '').includes(q) || (r.customer_phone || '').includes(q.replace(/^0/, '')));
+
+    document.querySelectorAll('.card').forEach(c => c.classList.toggle('active', c.dataset.f === f));
+
+    // اللي ردّوا فوق (الأحدث ردًا الأول)، وبعدين الباقي بالأحدث إرسالًا
+    list = list.slice().sort((a, b) => {
+      const ar = a.reply_count > 0 ? 1 : 0;
+      const br = b.reply_count > 0 ? 1 : 0;
+      if (ar !== br) return br - ar;
+      if (ar && br) return String(b.last_reply_at || '').localeCompare(String(a.last_reply_at || ''));
+      return String(b.sent_at || '').localeCompare(String(a.sent_at || ''));
+    });
 
     const tb = document.getElementById('rows');
     if (!list.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">مفيش نتايج</td></tr>'; return; }
@@ -4171,6 +4204,25 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
   }
 
   function closeChat() { document.getElementById('modal').style.display = 'none'; }
+
+  function setFilter(f) {
+    document.getElementById('filter').value = f;
+    render();
+    document.querySelector('.tablebox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function logout() {
+    try { localStorage.removeItem('sadin_pw'); } catch (e) {}
+    document.getElementById('pw').value = '';
+    data = [];
+    render();
+  }
+
+  // كلمة السر بتتحفظ على الجهاز ده، فمش هتكتبها كل مرة
+  try {
+    const saved = localStorage.getItem('sadin_pw');
+    if (saved) { document.getElementById('pw').value = saved; load(); }
+  } catch (e) {}
 
   document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
   setInterval(() => { if (pw() && data.length) load(); }, 30000);
