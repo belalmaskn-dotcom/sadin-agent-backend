@@ -209,6 +209,18 @@ async function initializeDatabase() {
   `);
 
 
+  await pool.query(`
+    ALTER TABLE broadcast_log
+    ADD COLUMN IF NOT EXISTS message_id TEXT;
+  `);
+
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcast_log_msg
+    ON broadcast_log(message_id);
+  `);
+
+
   console.log(
     'Database tables ready'
   );
@@ -3176,8 +3188,8 @@ async function runBroadcast(
       await pool.query(
         `
         INSERT INTO broadcast_log
-        (customer_phone, customer_name, template_name, status, error)
-        VALUES ($1, $2, $3, $4, $5)
+        (customer_phone, customer_name, template_name, status, error, message_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         `,
         [
           recipient.phone,
@@ -3185,6 +3197,7 @@ async function runBroadcast(
           BROADCAST_TEMPLATE_NAME,
           result.ok ? 'sent' : 'failed',
           result.ok ? null : result.error,
+          result.ok ? result.messageId : null,
         ]
       );
 
@@ -3467,6 +3480,7 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
 <body>
 <div class="box">
   <h1>📤 إرسال رسالة العروض لقائمة أرقام</h1>
+  <p><a href="/dashboard" style="color:#7a5c1e;font-weight:bold">📊 افتح لوحة المتابعة</a></p>
   <p class="hint">القالب: <b>${BROADCAST_TEMPLATE_NAME}</b> — ابعت بس لعملاء موافقين يستقبلوا رسايل منك.</p>
 
   <label>كلمة السر</label>
@@ -3571,6 +3585,25 @@ function handleMessageStatus(
   ) {
 
     broadcastState.delivered++;
+
+
+    pool.query(
+      `
+      UPDATE broadcast_log
+      SET status = 'delivered'
+      WHERE message_id = $1
+      AND status = 'sent'
+      `,
+      [
+        status.id,
+      ]
+    ).catch(
+      (err) =>
+        console.error(
+          'Update delivered error:',
+          err
+        )
+    );
   }
 
 
@@ -3580,6 +3613,25 @@ function handleMessageStatus(
   ) {
 
     broadcastState.read++;
+
+
+    pool.query(
+      `
+      UPDATE broadcast_log
+      SET status = 'read'
+      WHERE message_id = $1
+      AND status IN ('sent', 'delivered')
+      `,
+      [
+        status.id,
+      ]
+    ).catch(
+      (err) =>
+        console.error(
+          'Update read error:',
+          err
+        )
+    );
   }
 
 
@@ -3621,18 +3673,11 @@ function handleMessageStatus(
       `
       UPDATE broadcast_log
       SET status = 'not_delivered', error = $1
-      WHERE id = (
-        SELECT id FROM broadcast_log
-        WHERE customer_phone = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-      )
+      WHERE message_id = $2
       `,
       [
         errors,
-        normalizePhone(
-          status.recipient_id
-        ),
+        status.id,
       ]
     ).catch(
       (err) =>
@@ -3643,6 +3688,416 @@ function handleMessageStatus(
     );
   }
 }
+
+
+// =====================================================
+// لوحة المتابعة (Dashboard)
+// =====================================================
+
+app.get(
+  '/dashboard',
+  (req, res) => {
+
+    res
+      .status(200)
+      .type('html')
+      .send(DASHBOARD_PAGE_HTML);
+  }
+);
+
+
+// كل الرسايل اللي اتبعتت + هل العميل رد + آخر رد
+
+app.get(
+  '/api/dashboard',
+  async (req, res) => {
+
+    if (
+      !checkBroadcastPassword(
+        req
+      )
+    ) {
+
+      return res
+        .status(401)
+        .json({
+          error:
+            'كلمة السر غلط',
+        });
+    }
+
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            b.id,
+            b.customer_phone,
+            b.customer_name,
+            b.template_name,
+            b.status,
+            b.error,
+            to_char(b.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS sent_at,
+
+            (
+              SELECT COUNT(*)
+              FROM conversations c
+              WHERE c.customer_phone = b.customer_phone
+              AND c.role = 'user'
+              AND c.created_at >= b.created_at
+            )::int AS reply_count,
+
+            (
+              SELECT c.message
+              FROM conversations c
+              WHERE c.customer_phone = b.customer_phone
+              AND c.role = 'user'
+              AND c.created_at >= b.created_at
+              ORDER BY c.created_at DESC
+              LIMIT 1
+            ) AS last_reply,
+
+            (
+              SELECT to_char(c.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+              FROM conversations c
+              WHERE c.customer_phone = b.customer_phone
+              AND c.role = 'user'
+              AND c.created_at >= b.created_at
+              ORDER BY c.created_at DESC
+              LIMIT 1
+            ) AS last_reply_at,
+
+            EXISTS (
+              SELECT 1
+              FROM opt_outs o
+              WHERE o.customer_phone = b.customer_phone
+            ) AS opted_out
+
+          FROM broadcast_log b
+          ORDER BY b.created_at DESC
+          LIMIT 1000
+          `
+        );
+
+
+      return res.json({
+        rows:
+          result.rows,
+      });
+
+    } catch (err) {
+
+      console.error(
+        'Dashboard error:',
+        err
+      );
+
+
+      return res
+        .status(500)
+        .json({
+          error:
+            'حصل خطأ في قراءة البيانات',
+        });
+    }
+  }
+);
+
+
+// المحادثة الكاملة مع عميل
+
+app.get(
+  '/api/dashboard/conversation',
+  async (req, res) => {
+
+    if (
+      !checkBroadcastPassword(
+        req
+      )
+    ) {
+
+      return res
+        .status(401)
+        .json({
+          error:
+            'كلمة السر غلط',
+        });
+    }
+
+
+    const phone =
+      normalizePhone(
+        req.query.phone
+      );
+
+
+    if (!phone) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            'الرقم ناقص',
+        });
+    }
+
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            role,
+            message,
+            to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+          FROM conversations
+          WHERE customer_phone = $1
+          ORDER BY created_at ASC
+          LIMIT 500
+          `,
+          [
+            phone,
+          ]
+        );
+
+
+      return res.json({
+        messages:
+          result.rows,
+      });
+
+    } catch (err) {
+
+      console.error(
+        'Dashboard conversation error:',
+        err
+      );
+
+
+      return res
+        .status(500)
+        .json({
+          error:
+            'حصل خطأ في قراءة المحادثة',
+        });
+    }
+  }
+);
+
+
+const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة متابعة الرسائل - سدين</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Tahoma, Arial, sans-serif; background:#f4f1ea; margin:0; padding:16px; color:#222; }
+  .wrap { max-width:1200px; margin:0 auto; }
+  h1 { font-size:22px; color:#7a5c1e; margin:0 0 4px; }
+  a { color:#7a5c1e; }
+  .top { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .login { display:flex; gap:8px; }
+  input, select { padding:9px; border:1px solid #ccc; border-radius:8px; font-size:15px; font-family:inherit; }
+  button { padding:9px 16px; background:#7a5c1e; color:#fff; border:none; border-radius:8px; font-size:15px; cursor:pointer; font-family:inherit; }
+  button.light { background:#fff; color:#7a5c1e; border:1px solid #7a5c1e; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-bottom:14px; }
+  .card { background:#fff; border-radius:12px; padding:14px; box-shadow:0 1px 6px rgba(0,0,0,.06); text-align:center; }
+  .card b { display:block; font-size:28px; margin-top:4px; }
+  .card span { color:#666; font-size:14px; }
+  .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  .tablebox { background:#fff; border-radius:12px; overflow-x:auto; box-shadow:0 1px 6px rgba(0,0,0,.06); }
+  table { width:100%; border-collapse:collapse; min-width:820px; }
+  th, td { padding:10px; border-bottom:1px solid #eee; text-align:right; vertical-align:top; font-size:14px; }
+  th { background:#faf7f0; color:#555; position:sticky; top:0; }
+  tr.replied { background:#f1faf1; }
+  .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:12px; white-space:nowrap; }
+  .b-sent { background:#eee; color:#555; }
+  .b-delivered { background:#e3f0ff; color:#1a5fb4; }
+  .b-read { background:#dff5e1; color:#1b7a2b; }
+  .b-failed { background:#fde3e3; color:#b42318; }
+  .b-stop { background:#fff1d6; color:#9a6200; }
+  .reply { max-width:320px; white-space:pre-wrap; }
+  .muted { color:#999; }
+  #msg { margin:10px 0; color:#b42318; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:12px; }
+  .modal .box { background:#efe7dd; width:100%; max-width:560px; max-height:88vh; border-radius:14px; display:flex; flex-direction:column; overflow:hidden; }
+  .modal .head { background:#7a5c1e; color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .modal .body { padding:14px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+  .bubble { max-width:82%; padding:8px 12px; border-radius:10px; white-space:pre-wrap; font-size:14px; line-height:1.6; }
+  .bubble small { display:block; color:#888; font-size:11px; margin-top:4px; }
+  .user { background:#fff; align-self:flex-start; }
+  .assistant { background:#d9fdd3; align-self:flex-end; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>📊 لوحة متابعة رسائل العروض</h1>
+      <a href="/broadcast">📤 الرجوع لصفحة الإرسال</a>
+    </div>
+    <div class="login">
+      <input id="pw" type="password" placeholder="كلمة السر" autocomplete="off">
+      <button onclick="load()">عرض</button>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+
+  <div class="cards">
+    <div class="card"><span>اتبعتت</span><b id="c-sent">–</b></div>
+    <div class="card"><span>وصلت</span><b id="c-delivered">–</b></div>
+    <div class="card"><span>اتقرت</span><b id="c-read">–</b></div>
+    <div class="card"><span>ردّوا</span><b id="c-replied">–</b></div>
+    <div class="card"><span>طلبوا إيقاف</span><b id="c-stop">–</b></div>
+    <div class="card"><span>فشلت</span><b id="c-failed">–</b></div>
+  </div>
+
+  <div class="filters">
+    <select id="filter" onchange="render()">
+      <option value="all">الكل</option>
+      <option value="replied">اللي ردّوا بس</option>
+      <option value="noreply">اللي ما ردّوش</option>
+      <option value="failed">اللي فشلت</option>
+      <option value="stop">اللي طلبوا إيقاف</option>
+    </select>
+    <input id="q" placeholder="بحث بالاسم أو الرقم" oninput="render()">
+    <button class="light" onclick="load()">🔄 تحديث</button>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead>
+        <tr>
+          <th>العميل</th>
+          <th>الرقم</th>
+          <th>وقت الإرسال</th>
+          <th>حالة الرسالة</th>
+          <th>رد؟</th>
+          <th>آخر رد منه</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">اكتب كلمة السر ودوس "عرض"</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal" id="modal" onclick="if(event.target===this)closeChat()">
+  <div class="box">
+    <div class="head"><b id="chat-title">المحادثة</b><button class="light" onclick="closeChat()">✕</button></div>
+    <div class="body" id="chat"></div>
+  </div>
+</div>
+
+<script>
+  let data = [];
+
+  function pw() { return document.getElementById('pw').value; }
+
+  function fmt(iso) {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    } catch (e) { return iso; }
+  }
+
+  function esc(t) {
+    const d = document.createElement('div');
+    d.textContent = t == null ? '' : String(t);
+    return d.innerHTML;
+  }
+
+  function statusBadge(r) {
+    if (r.status === 'failed' || r.status === 'not_delivered') return '<span class="badge b-failed" title="' + esc(r.error) + '">❌ فشلت</span>';
+    if (r.status === 'read') return '<span class="badge b-read">✔✔ اتقرت</span>';
+    if (r.status === 'delivered') return '<span class="badge b-delivered">✔✔ وصلت</span>';
+    return '<span class="badge b-sent">✔ اتبعتت</span>';
+  }
+
+  async function load() {
+    const m = document.getElementById('msg');
+    m.textContent = '';
+    try {
+      const r = await fetch('/api/dashboard', { headers: { 'x-broadcast-password': pw() } });
+      const j = await r.json();
+      if (!r.ok) { m.textContent = '❌ ' + (j.error || 'حصل خطأ'); return; }
+      data = j.rows || [];
+      render();
+    } catch (e) {
+      m.textContent = '❌ مقدرتش أوصل للسيرفر. اتأكد إن كلمة السر مكتوبة بالإنجليزي.';
+    }
+  }
+
+  function render() {
+    const f = document.getElementById('filter').value;
+    const q = document.getElementById('q').value.trim();
+
+    const failed = r => r.status === 'failed' || r.status === 'not_delivered';
+    document.getElementById('c-sent').textContent = data.filter(r => !failed(r)).length;
+    document.getElementById('c-delivered').textContent = data.filter(r => r.status === 'delivered' || r.status === 'read').length;
+    document.getElementById('c-read').textContent = data.filter(r => r.status === 'read').length;
+    document.getElementById('c-replied').textContent = data.filter(r => r.reply_count > 0).length;
+    document.getElementById('c-stop').textContent = data.filter(r => r.opted_out).length;
+    document.getElementById('c-failed').textContent = data.filter(failed).length;
+
+    let list = data;
+    if (f === 'replied') list = list.filter(r => r.reply_count > 0);
+    if (f === 'noreply') list = list.filter(r => r.reply_count === 0 && !failed(r));
+    if (f === 'failed') list = list.filter(failed);
+    if (f === 'stop') list = list.filter(r => r.opted_out);
+    if (q) list = list.filter(r => (r.customer_name || '').includes(q) || (r.customer_phone || '').includes(q.replace(/^0/, '')));
+
+    const tb = document.getElementById('rows');
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">مفيش نتايج</td></tr>'; return; }
+
+    tb.innerHTML = list.map(r => {
+      const replied = r.reply_count > 0;
+      let replyCell = replied ? '✅ ' + r.reply_count + ' رسالة' : '<span class="muted">لسه</span>';
+      if (r.opted_out) replyCell += ' <span class="badge b-stop">⛔ إيقاف</span>';
+      return '<tr class="' + (replied ? 'replied' : '') + '">' +
+        '<td>' + esc(r.customer_name) + '</td>' +
+        '<td dir="ltr" style="text-align:right">+' + esc(r.customer_phone) + '</td>' +
+        '<td>' + fmt(r.sent_at) + '</td>' +
+        '<td>' + statusBadge(r) + (failed(r) && r.error ? '<div class="muted" style="font-size:12px">' + esc(r.error) + '</div>' : '') + '</td>' +
+        '<td>' + replyCell + '</td>' +
+        '<td class="reply">' + (r.last_reply ? esc(r.last_reply) + '<div class="muted" style="font-size:12px">' + fmt(r.last_reply_at) + '</div>' : '') + '</td>' +
+        '<td><button class="light" onclick="openChat(\\'' + esc(r.customer_phone) + '\\', \\'' + esc(r.customer_name).replace(/'/g, '') + '\\')">💬 المحادثة</button></td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function openChat(phone, name) {
+    document.getElementById('chat-title').textContent = name + ' — +' + phone;
+    const box = document.getElementById('chat');
+    box.innerHTML = '<div class="muted">جاري التحميل...</div>';
+    document.getElementById('modal').style.display = 'flex';
+    try {
+      const r = await fetch('/api/dashboard/conversation?phone=' + encodeURIComponent(phone), { headers: { 'x-broadcast-password': pw() } });
+      const j = await r.json();
+      if (!r.ok) { box.innerHTML = '<div>❌ ' + esc(j.error) + '</div>'; return; }
+      if (!j.messages.length) { box.innerHTML = '<div class="muted">مفيش رسايل</div>'; return; }
+      box.innerHTML = j.messages.map(m =>
+        '<div class="bubble ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + esc(m.message) + '<small>' + (m.role === 'user' ? 'العميل' : 'البوت') + ' · ' + fmt(m.at) + '</small></div>'
+      ).join('');
+      box.scrollTop = box.scrollHeight;
+    } catch (e) {
+      box.innerHTML = '<div>❌ حصل خطأ</div>';
+    }
+  }
+
+  function closeChat() { document.getElementById('modal').style.display = 'none'; }
+
+  document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  setInterval(() => { if (pw() && data.length) load(); }, 30000);
+</script>
+</body>
+</html>`;
 
 
 // =====================================================
