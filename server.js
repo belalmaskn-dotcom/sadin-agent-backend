@@ -2540,6 +2540,27 @@ async function processCustomerMessage(
 
 
   // =================================================
+  // طلب موقع العقار
+  // =================================================
+
+  const locationHandled =
+    await handleLocationRequest({
+      customerPhone:
+        from,
+      userText,
+      history,
+    });
+
+
+  if (
+    locationHandled
+  ) {
+
+    return;
+  }
+
+
+  // =================================================
   // نظام المعاينة
   //
   // الريكورد يدخل نفس المسار بالضبط.
@@ -4098,6 +4119,631 @@ const DASHBOARD_PAGE_HTML = `<!DOCTYPE html>
 </script>
 </body>
 </html>`;
+
+
+// =====================================================
+// طلب موقع العقار
+// - يبعت للعميل لوكيشن العقار
+// - ويبلّغ رقم الإدارة (اللي آخره 666) إن العميل طلب الموقع
+// =====================================================
+
+const LOCATION_ALERT_NUMBER =
+  normalizePhone(
+    process.env.LOCATION_ALERT_NUMBER ||
+    '966530084666'
+  );
+
+// اسم قالب "أداة مساعدة" اختياري للتنبيه (لو الرقم ما كلّمش البوت آخر 24 ساعة)
+// القالب لازم يكون فيه 3 متغيرات: {{1}} رقم العميل، {{2}} العقار، {{3}} رابط الموقع
+const LOCATION_ALERT_TEMPLATE =
+  process.env.LOCATION_ALERT_TEMPLATE ||
+  '';
+
+let LOCATION_PROPERTIES = [];
+
+try {
+
+  LOCATION_PROPERTIES =
+    require('./bayut-properties.json')
+      .filter(
+        (p) =>
+          p &&
+          p.latitude &&
+          p.longitude
+      );
+
+} catch (err) {
+
+  console.error(
+    'Could not load bayut-properties.json for locations:',
+    err.message
+  );
+}
+
+
+function normalizeArabic(
+  text
+) {
+
+  return String(
+    text || ''
+  )
+    .replace(/[\u064B-\u0652\u0640]/g, '')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .toLowerCase();
+}
+
+
+function isLocationRequest(
+  text
+) {
+
+  const value =
+    normalizeArabic(
+      text
+    );
+
+
+  if (
+    value.length > 120
+  ) {
+
+    return false;
+  }
+
+
+  return /لوكيشن|لوكيشين|لوكشن|location|الموقع|موقعه|موقعها|موقع العقار|الخريطه|خريطه|قوقل ماب|جوجل ماب|google map|وين مكان|فين مكان|وين يقع|وين تقع|فين يقع|فين تقع|اين يقع|اين تقع|وين مكانه|وين مكانها|ارسل.{0,10}العنوان|ابي العنوان|ابغي العنوان|عايز العنوان/.test(
+    value
+  );
+}
+
+
+function scorePropertyInText(
+  property,
+  text
+) {
+
+  let score = 0;
+
+
+  if (
+    property.bayut_id &&
+    text.includes(
+      String(property.bayut_id)
+    )
+  ) {
+
+    score += 20;
+  }
+
+
+  const title =
+    normalizeArabic(
+      property.title_ar
+    );
+
+
+  if (
+    title &&
+    text.includes(title)
+  ) {
+
+    score += 10;
+  }
+
+
+  const district =
+    normalizeArabic(
+      property.district
+    )
+      .replace(/^حي\s+/, '');
+
+
+  if (
+    district.length > 2 &&
+    (
+      text.includes(district) ||
+      text.includes(district.replace(/^ال/, ''))
+    )
+  ) {
+
+    score += 4;
+  }
+
+
+  if (
+    property.price
+  ) {
+
+    const price =
+      Number(property.price);
+
+
+    if (
+      text.includes(price.toLocaleString('en-US')) ||
+      text.includes(String(price))
+    ) {
+
+      score += 5;
+    }
+  }
+
+
+  const type =
+    normalizeArabic(
+      property.property_type_ar
+    );
+
+
+  if (
+    score > 0 &&
+    type &&
+    text.includes(type)
+  ) {
+
+    score += 1;
+  }
+
+
+  return score;
+}
+
+
+// يدوّر على العقار اللي العميل بيتكلم عنه
+// من أحدث رسالة لأقدم رسالة
+
+function findPropertyForLocation(
+  userText,
+  history
+) {
+
+  if (
+    !LOCATION_PROPERTIES.length
+  ) {
+
+    return null;
+  }
+
+
+  const messages = [
+    userText,
+    ...[...(history || [])]
+      .reverse()
+      .map(
+        (m) =>
+          m.content
+      ),
+  ].slice(0, 12);
+
+
+  for (
+    const message
+    of messages
+  ) {
+
+    const text =
+      normalizeArabic(
+        message
+      );
+
+
+    if (!text) {
+
+      continue;
+    }
+
+
+    const scored =
+      LOCATION_PROPERTIES
+        .map(
+          (property) => ({
+            property,
+            score:
+              scorePropertyInText(
+                property,
+                text
+              ),
+          })
+        )
+        .filter(
+          (x) =>
+            x.score > 0
+        )
+        .sort(
+          (a, b) =>
+            b.score - a.score
+        );
+
+
+    if (
+      !scored.length
+    ) {
+
+      continue;
+    }
+
+
+    // عقار واحد واضح
+    if (
+      scored.length === 1 ||
+      scored[0].score > scored[1].score
+    ) {
+
+      return scored[0].property;
+    }
+
+
+    // أكتر من عقار بنفس الدرجة: مش واضح
+    return null;
+  }
+
+
+  return null;
+}
+
+
+async function sendWhatsAppLocation(
+  to,
+  property
+) {
+
+  try {
+
+    await axios.post(
+
+      `https://graph.facebook.com/v23.0/${PHONE_NUMBER_ID}/messages`,
+
+      {
+        messaging_product:
+          'whatsapp',
+
+        recipient_type:
+          'individual',
+
+        to:
+          normalizePhone(to),
+
+        type:
+          'location',
+
+        location: {
+          latitude:
+            Number(property.latitude),
+
+          longitude:
+            Number(property.longitude),
+
+          name:
+            String(
+              property.title_ar ||
+              property.title ||
+              'موقع العقار'
+            ).slice(0, 100),
+
+          address:
+            [
+              property.district,
+              property.city,
+            ]
+              .filter(Boolean)
+              .join('، '),
+        },
+      },
+
+      {
+        headers: {
+          Authorization:
+            `Bearer ${WHATSAPP_TOKEN}`,
+
+          'Content-Type':
+            'application/json',
+        },
+
+        timeout:
+          30000,
+      }
+    );
+
+
+    return true;
+
+  } catch (err) {
+
+    console.error(
+      'WhatsApp send location error:',
+      JSON.stringify(
+        err.response?.data ||
+          err.message,
+        null,
+        2
+      )
+    );
+
+
+    return false;
+  }
+}
+
+
+async function sendWhatsAppTemplateWithParams(
+  to,
+  templateName,
+  params
+) {
+
+  try {
+
+    await axios.post(
+
+      `https://graph.facebook.com/v23.0/${PHONE_NUMBER_ID}/messages`,
+
+      {
+        messaging_product:
+          'whatsapp',
+
+        to:
+          normalizePhone(to),
+
+        type:
+          'template',
+
+        template: {
+          name:
+            templateName,
+
+          language: {
+            code:
+              'ar',
+          },
+
+          components: [
+            {
+              type:
+                'body',
+
+              parameters:
+                params.map(
+                  (p) => ({
+                    type:
+                      'text',
+
+                    // متغيرات القوالب ما ينفعش فيها سطور جديدة
+                    text:
+                      String(p || '-')
+                        .replace(/\s+/g, ' ')
+                        .slice(0, 900),
+                  })
+                ),
+            },
+          ],
+        },
+      },
+
+      {
+        headers: {
+          Authorization:
+            `Bearer ${WHATSAPP_TOKEN}`,
+
+          'Content-Type':
+            'application/json',
+        },
+
+        timeout:
+          30000,
+      }
+    );
+
+
+    return true;
+
+  } catch (err) {
+
+    console.error(
+      'WhatsApp send alert template error:',
+      JSON.stringify(
+        err.response?.data ||
+          err.message,
+        null,
+        2
+      )
+    );
+
+
+    return false;
+  }
+}
+
+
+function mapsLink(
+  property
+) {
+
+  return `https://maps.google.com/?q=${property.latitude},${property.longitude}`;
+}
+
+
+async function notifyLocationRequest(
+  customerPhone,
+  property
+) {
+
+  if (
+    !LOCATION_ALERT_NUMBER
+  ) {
+
+    return;
+  }
+
+
+  const propertyName =
+    property
+      ? (property.title_ar || property.title || 'عقار')
+      : 'لم يحدد العقار';
+
+
+  const lines = [
+    '📍 عميل طلب موقع عقار',
+    '',
+    'رقم العميل:',
+    `+${customerPhone}`,
+    `https://wa.me/${customerPhone}`,
+    '',
+    'العقار:',
+    propertyName,
+  ];
+
+
+  if (
+    property
+  ) {
+
+    if (property.price) {
+
+      lines.push(
+        '',
+        'السعر:',
+        `${Number(property.price).toLocaleString('en-US')} ريال`
+      );
+    }
+
+
+    lines.push(
+      '',
+      'الموقع:',
+      mapsLink(property)
+    );
+
+
+    if (property.bayut_url) {
+
+      lines.push(
+        '',
+        'الإعلان:',
+        property.bayut_url
+      );
+    }
+
+
+    lines.push(
+      '',
+      '✅ تم إرسال الموقع للعميل تلقائيًا'
+    );
+
+  } else {
+
+    lines.push(
+      '',
+      '⚠️ البوت سأل العميل عن العقار المقصود'
+    );
+  }
+
+
+  const sent =
+    await sendWhatsAppText(
+      LOCATION_ALERT_NUMBER,
+      lines.join('\n')
+    );
+
+
+  // لو الرسالة العادية ما وصلتش (غالبًا الرقم ما كلّمش البوت آخر 24 ساعة)
+  // نجرب القالب لو متضاف
+
+  if (
+    !sent &&
+    LOCATION_ALERT_TEMPLATE
+  ) {
+
+    await sendWhatsAppTemplateWithParams(
+      LOCATION_ALERT_NUMBER,
+      LOCATION_ALERT_TEMPLATE,
+      [
+        `+${customerPhone}`,
+        propertyName,
+        property
+          ? mapsLink(property)
+          : 'لم يحدد العقار',
+      ]
+    );
+  }
+}
+
+
+async function handleLocationRequest({
+  customerPhone,
+  userText,
+  history,
+}) {
+
+  if (
+    !isLocationRequest(
+      userText
+    )
+  ) {
+
+    return false;
+  }
+
+
+  const property =
+    findPropertyForLocation(
+      userText,
+      history
+    );
+
+
+  let reply;
+
+
+  if (
+    property
+  ) {
+
+    reply =
+      `أبشر 🌹 هذا موقع العقار:\n${property.title_ar || property.title}\n\n📍 ${mapsLink(property)}\n\nولو حاب نرتب لك معاينة، قولي اليوم والوقت المناسب لك.`;
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+
+
+    await sendWhatsAppLocation(
+      customerPhone,
+      property
+    );
+
+  } else {
+
+    reply =
+      'أبشر 🌹 وش العقار اللي تبغى موقعه؟ اكتب لي الحي أو نوع العقار، وأرسل لك اللوكيشن على طول.';
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+  }
+
+
+  await saveConversation(
+    customerPhone,
+    'assistant',
+    reply
+  );
+
+
+  await notifyLocationRequest(
+    customerPhone,
+    property
+  );
+
+
+  return true;
+}
 
 
 // =====================================================
