@@ -2561,6 +2561,27 @@ async function processCustomerMessage(
 
 
   // =================================================
+  // طلب صور العقار
+  // =================================================
+
+  const photosHandled =
+    await handlePhotosRequest({
+      customerPhone:
+        from,
+      userText,
+      history,
+    });
+
+
+  if (
+    photosHandled
+  ) {
+
+    return;
+  }
+
+
+  // =================================================
   // نظام المعاينة
   //
   // الريكورد يدخل نفس المسار بالضبط.
@@ -2622,7 +2643,7 @@ async function processCustomerMessage(
   // AI reply
   // =================================================
 
-  const reply =
+  let reply =
     await generateReply(
       history,
       userText
@@ -2632,6 +2653,23 @@ async function processCustomerMessage(
   if (!reply) {
 
     return;
+  }
+
+
+  // لو البوت ما عندوش المعلومة: نطمّن العميل ونبلّغ الفريق
+
+  const missingInfo =
+    isMissingInfoReply(
+      reply
+    );
+
+
+  if (
+    missingInfo
+  ) {
+
+    reply =
+      `${reply.trim()}\n\nبيتواصل معك أحد من فريقنا ويرد عليك بالمعلومة 🌹`;
   }
 
 
@@ -2652,6 +2690,26 @@ async function processCustomerMessage(
     'assistant',
     reply
   );
+
+
+  if (
+    missingInfo
+  ) {
+
+    await notifyTeam({
+      kind:
+        'missing',
+      customerPhone:
+        from,
+      property:
+        findPropertyForLocation(
+          userText,
+          history
+        ),
+      question:
+        userText,
+    });
+  }
 }
 
 
@@ -4565,112 +4623,6 @@ function mapsLink(
 }
 
 
-async function notifyLocationRequest(
-  customerPhone,
-  property
-) {
-
-  if (
-    !LOCATION_ALERT_NUMBER
-  ) {
-
-    return;
-  }
-
-
-  const propertyName =
-    property
-      ? (property.title_ar || property.title || 'عقار')
-      : 'لم يحدد العقار';
-
-
-  const lines = [
-    '📍 عميل طلب موقع عقار',
-    '',
-    'رقم العميل:',
-    `+${customerPhone}`,
-    `https://wa.me/${customerPhone}`,
-    '',
-    'العقار:',
-    propertyName,
-  ];
-
-
-  if (
-    property
-  ) {
-
-    if (property.price) {
-
-      lines.push(
-        '',
-        'السعر:',
-        `${Number(property.price).toLocaleString('en-US')} ريال`
-      );
-    }
-
-
-    lines.push(
-      '',
-      'الموقع:',
-      mapsLink(property)
-    );
-
-
-    if (property.bayut_url) {
-
-      lines.push(
-        '',
-        'الإعلان:',
-        property.bayut_url
-      );
-    }
-
-
-    lines.push(
-      '',
-      '✅ تم إرسال الموقع للعميل تلقائيًا'
-    );
-
-  } else {
-
-    lines.push(
-      '',
-      '⚠️ البوت سأل العميل عن العقار المقصود'
-    );
-  }
-
-
-  const sent =
-    await sendWhatsAppText(
-      LOCATION_ALERT_NUMBER,
-      lines.join('\n')
-    );
-
-
-  // لو الرسالة العادية ما وصلتش (غالبًا الرقم ما كلّمش البوت آخر 24 ساعة)
-  // نجرب القالب لو متضاف
-
-  if (
-    !sent &&
-    LOCATION_ALERT_TEMPLATE
-  ) {
-
-    await sendWhatsAppTemplateWithParams(
-      LOCATION_ALERT_NUMBER,
-      LOCATION_ALERT_TEMPLATE,
-      [
-        `+${customerPhone}`,
-        propertyName,
-        property
-          ? mapsLink(property)
-          : 'لم يحدد العقار',
-      ]
-    );
-  }
-}
-
-
 async function handleLocationRequest({
   customerPhone,
   userText,
@@ -4736,10 +4688,463 @@ async function handleLocationRequest({
   );
 
 
-  await notifyLocationRequest(
+  await notifyTeam({
+    kind:
+      'location',
     customerPhone,
-    property
+    property,
+    question:
+      userText,
+    note:
+      property
+        ? '✅ تم إرسال الموقع للعميل تلقائيًا'
+        : '⚠️ البوت سأل العميل عن العقار المقصود',
+  });
+
+
+  return true;
+}
+
+
+// =====================================================
+// تنبيه فريق المبيعات (الرقم اللي آخره 666)
+// - طلب موقع
+// - طلب صور
+// - معلومة مش موجودة عند البوت
+// =====================================================
+
+const TEAM_ALERT_COOLDOWN_MS =
+  10 * 60 * 1000;
+
+const teamAlertLastSent =
+  new Map();
+
+
+const TEAM_ALERT_TITLES = {
+  location:
+    '📍 عميل طلب موقع عقار',
+
+  photos:
+    '📸 عميل طلب صور عقار',
+
+  missing:
+    '❓ عميل سأل عن معلومة مش عند البوت',
+};
+
+
+async function notifyTeam({
+  kind,
+  customerPhone,
+  property,
+  question,
+  note,
+}) {
+
+  if (
+    !LOCATION_ALERT_NUMBER
+  ) {
+
+    return;
+  }
+
+
+  // ما نكررش نفس التنبيه لنفس العميل خلال 10 دقايق
+
+  const key =
+    `${kind}:${customerPhone}`;
+
+
+  const last =
+    teamAlertLastSent.get(key) || 0;
+
+
+  if (
+    Date.now() - last <
+    TEAM_ALERT_COOLDOWN_MS
+  ) {
+
+    return;
+  }
+
+
+  teamAlertLastSent.set(
+    key,
+    Date.now()
   );
+
+
+  const propertyName =
+    property
+      ? (property.title_ar || property.title || 'عقار')
+      : 'غير محدد';
+
+
+  const lines = [
+    TEAM_ALERT_TITLES[kind] || '🔔 تنبيه من البوت',
+    '',
+    'رقم العميل:',
+    `+${customerPhone}`,
+    `https://wa.me/${customerPhone}`,
+  ];
+
+
+  if (
+    question
+  ) {
+
+    lines.push(
+      '',
+      'رسالة العميل:',
+      String(question).slice(0, 500)
+    );
+  }
+
+
+  lines.push(
+    '',
+    'العقار:',
+    propertyName
+  );
+
+
+  if (
+    property
+  ) {
+
+    if (property.price) {
+
+      lines.push(
+        '',
+        'السعر:',
+        `${Number(property.price).toLocaleString('en-US')} ريال`
+      );
+    }
+
+
+    if (
+      property.latitude &&
+      property.longitude
+    ) {
+
+      lines.push(
+        '',
+        'الموقع:',
+        mapsLink(property)
+      );
+    }
+
+
+    if (property.bayut_url) {
+
+      lines.push(
+        '',
+        'الإعلان:',
+        property.bayut_url
+      );
+    }
+  }
+
+
+  if (
+    note
+  ) {
+
+    lines.push(
+      '',
+      note
+    );
+  }
+
+
+  const sent =
+    await sendWhatsAppText(
+      LOCATION_ALERT_NUMBER,
+      lines.join('\n')
+    );
+
+
+  if (
+    !sent &&
+    LOCATION_ALERT_TEMPLATE
+  ) {
+
+    await sendWhatsAppTemplateWithParams(
+      LOCATION_ALERT_NUMBER,
+      LOCATION_ALERT_TEMPLATE,
+      [
+        `+${customerPhone}`,
+        `${TEAM_ALERT_TITLES[kind] || 'تنبيه'} - ${propertyName}`,
+        property && property.latitude
+          ? mapsLink(property)
+          : String(question || '-'),
+      ]
+    );
+  }
+}
+
+
+// =====================================================
+// رد البوت فيه "المعلومة مش متوفرة"
+// =====================================================
+
+function isMissingInfoReply(
+  reply
+) {
+
+  const value =
+    normalizeArabic(
+      reply
+    );
+
+
+  return /مو متوفر|مب متوفر|غير متوفر|مش متوفر|ما عندي معلوم|ماعندي معلوم|ليست متوفر|مو موجوده عندي|مو موجود عندي|غير موجوده عندي|ما تتوفر|لا تتوفر/.test(
+    value
+  );
+}
+
+
+// =====================================================
+// طلب صور العقار
+// =====================================================
+
+function isPhotosRequest(
+  text
+) {
+
+  const value =
+    normalizeArabic(
+      text
+    );
+
+
+  if (
+    value.length > 120
+  ) {
+
+    return false;
+  }
+
+
+  return /(^|\s)(ال|بال|و)?(صور|صوره|صورها|صوره|فيديو|فيديوهات|مقطع|مقاطع)|photo|picture|pics|image|video/.test(
+    value
+  );
+}
+
+
+async function sendWhatsAppImage(
+  to,
+  imageUrl,
+  caption
+) {
+
+  try {
+
+    await axios.post(
+
+      `https://graph.facebook.com/v23.0/${PHONE_NUMBER_ID}/messages`,
+
+      {
+        messaging_product:
+          'whatsapp',
+
+        recipient_type:
+          'individual',
+
+        to:
+          normalizePhone(to),
+
+        type:
+          'image',
+
+        image: {
+          link:
+            imageUrl,
+
+          ...(caption
+            ? { caption: String(caption).slice(0, 900) }
+            : {}),
+        },
+      },
+
+      {
+        headers: {
+          Authorization:
+            `Bearer ${WHATSAPP_TOKEN}`,
+
+          'Content-Type':
+            'application/json',
+        },
+
+        timeout:
+          30000,
+      }
+    );
+
+
+    return true;
+
+  } catch (err) {
+
+    console.error(
+      'WhatsApp send image error:',
+      JSON.stringify(
+        err.response?.data ||
+          err.message,
+        null,
+        2
+      )
+    );
+
+
+    return false;
+  }
+}
+
+
+async function handlePhotosRequest({
+  customerPhone,
+  userText,
+  history,
+}) {
+
+  if (
+    !isPhotosRequest(
+      userText
+    )
+  ) {
+
+    return false;
+  }
+
+
+  const property =
+    findPropertyForLocation(
+      userText,
+      history
+    );
+
+
+  const images =
+    property &&
+    Array.isArray(property.images)
+      ? property.images.filter(Boolean).slice(0, 4)
+      : [];
+
+
+  let reply;
+
+  let note;
+
+
+  if (
+    images.length
+  ) {
+
+    reply =
+      `أبشر 🌹 هذي صور العقار:\n${property.title_ar || property.title}`;
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+
+
+    let sentCount = 0;
+
+
+    for (
+      const url
+      of images
+    ) {
+
+      const ok =
+        await sendWhatsAppImage(
+          customerPhone,
+          url
+        );
+
+
+      if (ok) {
+
+        sentCount++;
+      }
+    }
+
+
+    note =
+      sentCount
+        ? `✅ البوت أرسل ${sentCount} صور للعميل تلقائيًا`
+        : '⚠️ البوت ما قدر يرسل الصور، تواصل مع العميل';
+
+
+    if (
+      !sentCount
+    ) {
+
+      const sorry =
+        'معليش، ما قدرت أرسل الصور الحين 🙏 بيتواصل معك أحد من فريقنا ويرسلها لك.';
+
+
+      await sendWhatsAppText(
+        customerPhone,
+        sorry
+      );
+
+
+      reply += `\n\n${sorry}`;
+    }
+
+  } else if (
+    property
+  ) {
+
+    reply =
+      'أبشر 🌹 الصور مو متوفرة عندي الحين، بيتواصل معك أحد من فريقنا ويرسلها لك.';
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+
+
+    note =
+      '⚠️ العقار ملوش صور عند البوت، ابعت الصور للعميل';
+
+  } else {
+
+    reply =
+      'أبشر 🌹 وش العقار اللي تبغى صوره؟ اكتب لي الحي أو نوع العقار، وأرسلها لك.';
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+
+
+    note =
+      '⚠️ البوت سأل العميل عن العقار المقصود';
+  }
+
+
+  await saveConversation(
+    customerPhone,
+    'assistant',
+    reply
+  );
+
+
+  await notifyTeam({
+    kind:
+      'photos',
+    customerPhone,
+    property,
+    question:
+      userText,
+    note,
+  });
 
 
   return true;
