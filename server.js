@@ -2142,6 +2142,47 @@ async function extractIncomingContent(
 
 
   // =================================================
+  // أزرار القوالب والرسائل التفاعلية
+  // =================================================
+
+  if (
+    message.type ===
+    'button'
+  ) {
+
+    return {
+      type:
+        'button',
+      text:
+        message.button?.text ||
+        message.button?.payload ||
+        '',
+    };
+  }
+
+
+  if (
+    message.type ===
+    'interactive'
+  ) {
+
+    const reply =
+      message.interactive?.button_reply ||
+      message.interactive?.list_reply;
+
+
+    return {
+      type:
+        'button',
+      text:
+        reply?.title ||
+        reply?.id ||
+        '',
+    };
+  }
+
+
+  // =================================================
   // Voice / Audio
   // =================================================
 
@@ -2478,6 +2519,42 @@ async function processCustomerMessage(
     `${incoming.type} from ${from}:`,
     userText
   );
+
+
+  // =================================================
+  // أزرار رسالة العرض
+  // =================================================
+
+  const typedViewRequest =
+    incoming.type !== 'button' &&
+    userText.length < 40 &&
+    detectButtonAction(userText) === 'view';
+
+
+  if (
+    incoming.type ===
+      'button' ||
+    typedViewRequest
+  ) {
+
+    const buttonHandled =
+      await handleTemplateButton({
+        customerPhone:
+          from,
+        buttonText:
+          userText,
+        onlyIfFromTemplate:
+          typedViewRequest,
+      });
+
+
+    if (
+      buttonHandled
+    ) {
+
+      return;
+    }
+  }
 
 
   // =================================================
@@ -2925,6 +3002,9 @@ function isOptOutMessage(
   return [
     'إيقاف',
     'ايقاف',
+    'إيقاف العروض الترويجية',
+    'ايقاف العروض الترويجية',
+    'stop promotions',
     'أيقاف',
     'إلغاء',
     'الغاء',
@@ -2999,8 +3079,86 @@ async function getOptedOutSet() {
 
 async function sendWhatsAppTemplate(
   to,
-  customerName
+  customerName,
+  templateKey
 ) {
+
+  const templateName =
+    templateKey ||
+    BROADCAST_TEMPLATE_NAME;
+
+
+  const config =
+    getBroadcastTemplate(
+      templateName
+    );
+
+
+  const components = [];
+
+
+  if (
+    config.header &&
+    config.header.type === 'video'
+  ) {
+
+    components.push({
+      type:
+        'header',
+
+      parameters: [
+        {
+          type:
+            'video',
+
+          video: {
+            link:
+              `${PUBLIC_BASE_URL}/media/${config.header.file}`,
+          },
+        },
+      ],
+    });
+  }
+
+
+  if (
+    config.header &&
+    config.header.type === 'image'
+  ) {
+
+    components.push({
+      type:
+        'header',
+
+      parameters: [
+        {
+          type:
+            'image',
+
+          image: {
+            link:
+              `${PUBLIC_BASE_URL}/media/${config.header.file}`,
+          },
+        },
+      ],
+    });
+  }
+
+
+  components.push({
+    type:
+      'body',
+
+    parameters: [
+      {
+        type:
+          'text',
+
+        text:
+          customerName,
+      },
+    ],
+  });
 
   if (
     !WHATSAPP_TOKEN ||
@@ -3035,29 +3193,14 @@ async function sendWhatsAppTemplate(
 
           template: {
             name:
-              BROADCAST_TEMPLATE_NAME,
+              templateName,
 
             language: {
               code:
                 BROADCAST_TEMPLATE_LANG,
             },
 
-            components: [
-              {
-                type:
-                  'body',
-
-                parameters: [
-                  {
-                    type:
-                      'text',
-
-                    text:
-                      customerName,
-                  },
-                ],
-              },
-            ],
+            components,
           },
         },
 
@@ -3258,7 +3401,8 @@ async function runBroadcast(
     const result =
       await sendWhatsAppTemplate(
         recipient.phone,
-        recipient.name
+        recipient.name,
+        broadcastState.templateKey
       );
 
 
@@ -3273,7 +3417,7 @@ async function runBroadcast(
         [
           recipient.phone,
           recipient.name,
-          BROADCAST_TEMPLATE_NAME,
+          broadcastState.templateKey || BROADCAST_TEMPLATE_NAME,
           result.ok ? 'sent' : 'failed',
           result.ok ? null : result.error,
           result.ok ? result.messageId : null,
@@ -3302,7 +3446,9 @@ async function runBroadcast(
       await saveConversation(
         recipient.phone,
         'assistant',
-        BROADCAST_TEMPLATE_PREVIEW.replace(
+        getBroadcastTemplate(
+          broadcastState.templateKey
+        ).preview.replace(
           '{{1}}',
           recipient.name
         )
@@ -3369,7 +3515,18 @@ app.get(
     res
       .status(200)
       .type('html')
-      .send(BROADCAST_PAGE_HTML);
+      .send(
+        BROADCAST_PAGE_HTML.replace(
+          '%%TEMPLATE_OPTIONS%%',
+          Object.entries(BROADCAST_TEMPLATES)
+            .map(
+              ([key, t]) =>
+                `<option value="${key}">${t.label}</option>`
+            )
+            .reverse()
+            .join('')
+        )
+      );
   }
 );
 
@@ -3464,9 +3621,16 @@ app.post(
     }
 
 
+    const templateKey =
+      BROADCAST_TEMPLATES[req.body?.template]
+        ? req.body.template
+        : BROADCAST_TEMPLATE_NAME;
+
+
     Object.assign(
       broadcastState,
       {
+        templateKey,
         running: true,
         total: recipients.length,
         sent: 0,
@@ -3560,7 +3724,9 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
 <div class="box">
   <h1>📤 إرسال رسالة العروض لقائمة أرقام</h1>
   <p><a href="/dashboard" style="color:#7a5c1e;font-weight:bold">📊 افتح لوحة المتابعة</a></p>
-  <p class="hint">القالب: <b>${BROADCAST_TEMPLATE_NAME}</b> — ابعت بس لعملاء موافقين يستقبلوا رسايل منك.</p>
+  <label>القالب (الرسالة اللي هتتبعت)</label>
+  <select id="tpl" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;font-size:16px;font-family:inherit">%%TEMPLATE_OPTIONS%%</select>
+  <p class="hint">ابعت بس لعملاء موافقين يستقبلوا رسايل منك.</p>
 
   <label>كلمة السر</label>
   <input id="pw" type="password" autocomplete="off">
@@ -3616,7 +3782,8 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
     const nums = document.getElementById('nums').value.trim();
     if (!nums) { show('اكتب الأرقام الأول'); return; }
     const count = nums.split('\\n').filter(l => l.trim()).length;
-    if (!confirm('هتبعت الرسالة لـ ' + count + ' رقم. متأكد؟')) return;
+    const tplName = document.getElementById('tpl').selectedOptions[0].text;
+    if (!confirm('هتبعت "' + tplName + '" لـ ' + count + ' رقم. متأكد؟')) return;
 
     btn.disabled = true;
     show('⏳ بنبدأ...');
@@ -3624,7 +3791,7 @@ const BROADCAST_PAGE_HTML = `<!DOCTYPE html>
       const r = await fetch('/api/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-broadcast-password': document.getElementById('pw').value },
-        body: JSON.stringify({ numbers: nums })
+        body: JSON.stringify({ numbers: nums, template: document.getElementById('tpl').value })
       });
       const data = await r.json();
       if (r.status === 401) { try { localStorage.removeItem('sadin_pw'); } catch (e) {} }
@@ -4781,6 +4948,9 @@ const TEAM_ALERT_TITLES = {
 
   missing:
     '❓ عميل سأل عن معلومة مش عند البوت',
+
+  viewing:
+    '🏠 عميل يبغى يوقف على العقار (معاينة)',
 };
 
 
@@ -5197,6 +5367,364 @@ async function handlePhotosRequest({
       userText,
     note,
   });
+
+
+  return true;
+}
+
+
+// =====================================================
+// القوالب المتاحة للإرسال الجماعي
+// =====================================================
+
+const PUBLIC_BASE_URL =
+  (
+    process.env.PUBLIC_BASE_URL ||
+    'https://sadin-agent-backend.onrender.com'
+  ).replace(/\/+$/, '');
+
+
+const ALARID_DETAILS =
+`🏢 *عمارة تجارية سكنية للبيع*
+📍 حي العريض – المدينة المنورة
+
+فرصة استثمارية مميزة في موقع حيوي على *شارع المنارات*، وعلى بُعد أقل من 3 كم من المسجد النبوي الشريف.
+
+📐 *تفاصيل العقار:*
+▫️ مساحة الأرض: 672 م²
+▫️ مساحة البناء: 1713.6 م²
+▫️ معارض تجارية
+▫️ 8 شقق سكنية (3 و5 غرف، مع صالات ومطابخ ودورتي مياه)
+▫️ ملحق علوي مع سطح
+▫️ مصعد
+▫️ العمارة مجددة بالكامل
+▫️ العمر التقريبي: 40 سنة
+
+💰 *السعر المطلوب: 2,990,000 ريال* (شامل الزوائد)
+
+✅ موقع تجاري وسكني مميز
+✅ مناسبة للاستثمار وتحقيق دخل إيجاري
+✅ قريبة من المسجد النبوي الشريف
+
+📞 اتصال: 0530084666
+
+📄 رقم ترخيص الإعلان: 7200927790`;
+
+
+const BROADCAST_TEMPLATES = {
+
+  sadin_property_offer: {
+    label:
+      'عرض الشقق (نص فقط)',
+
+    header:
+      null,
+
+    preview:
+      BROADCAST_TEMPLATE_PREVIEW,
+
+    property:
+      null,
+
+    details:
+      null,
+  },
+
+
+  sadin_alarid_building: {
+    label:
+      'عمارة العريض (فيديو + أزرار)',
+
+    // الفيديو لازم يكون مرفوع في GitHub جنب server.js بالاسم ده
+    header: {
+      type:
+        'video',
+
+      file:
+        'alarid.mp4',
+    },
+
+    preview:
+      `أهلاً {{1}} 👋\n\n${ALARID_DETAILS}\n\n💬 للتفاصيل رد على هذه الرسالة`,
+
+    property: {
+      title_ar:
+        'عمارة تجارية سكنية للبيع – حي العريض (شارع المنارات)',
+
+      price:
+        2990000,
+    },
+
+    details:
+      ALARID_DETAILS,
+  },
+};
+
+
+function getBroadcastTemplate(
+  key
+) {
+
+  return (
+    BROADCAST_TEMPLATES[key] ||
+    BROADCAST_TEMPLATES[BROADCAST_TEMPLATE_NAME] ||
+    Object.values(BROADCAST_TEMPLATES)[0]
+  );
+}
+
+
+// ملفات الفيديو/الصور اللي القوالب بتستخدمها
+
+app.get(
+  '/media/:file',
+  (req, res) => {
+
+    const allowed =
+      Object.values(BROADCAST_TEMPLATES)
+        .map(
+          (t) =>
+            t.header &&
+            t.header.file
+        )
+        .filter(Boolean);
+
+
+    const file =
+      String(
+        req.params.file || ''
+      );
+
+
+    if (
+      !allowed.includes(file)
+    ) {
+
+      return res
+        .status(404)
+        .send('Not found');
+    }
+
+
+    return res.sendFile(
+      require('path').join(
+        __dirname,
+        file
+      ),
+      (err) => {
+
+        if (
+          err &&
+          !res.headersSent
+        ) {
+
+          res
+            .status(404)
+            .send('File missing');
+        }
+      }
+    );
+  }
+);
+
+
+// =====================================================
+// أزرار القوالب (أبغى أوقف على العقار / التفاصيل / عروض ثانية)
+// =====================================================
+
+async function getLastTemplateForPhone(
+  customerPhone
+) {
+
+  try {
+
+    const result =
+      await pool.query(
+        `
+        SELECT template_name
+        FROM broadcast_log
+        WHERE customer_phone = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [
+          normalizePhone(
+            customerPhone
+          ),
+        ]
+      );
+
+
+    return (
+      result.rows[0]?.template_name ||
+      null
+    );
+
+  } catch (err) {
+
+    console.error(
+      'Get last template error:',
+      err
+    );
+
+
+    return null;
+  }
+}
+
+
+function detectButtonAction(
+  text
+) {
+
+  const value =
+    normalizeArabic(
+      text
+    );
+
+
+  if (
+    /اوقف|معاين|اشوف العقار/.test(value)
+  ) {
+
+    return 'view';
+  }
+
+
+  if (
+    /عروض ثاني|عروض اخري|عروض اخرى|عرض ثاني/.test(value)
+  ) {
+
+    return 'more';
+  }
+
+
+  if (
+    /تفاصيل/.test(value)
+  ) {
+
+    return 'details';
+  }
+
+
+  return null;
+}
+
+
+async function handleTemplateButton({
+  customerPhone,
+  buttonText,
+  onlyIfFromTemplate,
+}) {
+
+  const action =
+    detectButtonAction(
+      buttonText
+    );
+
+
+  if (!action) {
+
+    return false;
+  }
+
+
+  const templateKey =
+    await getLastTemplateForPhone(
+      customerPhone
+    );
+
+
+  const template =
+    templateKey
+      ? BROADCAST_TEMPLATES[templateKey]
+      : null;
+
+
+  // لو العميل كتبها بإيده ومش جاي من رسالة عرض فيها عقار، نسيب البوت العادي
+  if (
+    onlyIfFromTemplate &&
+    !template?.property
+  ) {
+
+    return false;
+  }
+
+
+  const property =
+    template?.property ||
+    null;
+
+
+  let reply;
+
+
+  if (
+    action === 'view'
+  ) {
+
+    reply =
+      property
+        ? `أبشر 🌹 سيتم التواصل معك من قبل الإدارة لترتيب موعد المعاينة على:\n${property.title_ar}\n\nلو عندك وقت مناسب لك، اكتبه هنا 👍`
+        : 'أبشر 🌹 سيتم التواصل معك من قبل الإدارة لترتيب موعد المعاينة.\n\nلو عندك وقت مناسب لك، اكتبه هنا 👍';
+
+  } else if (
+    action === 'details'
+  ) {
+
+    if (
+      !template?.details
+    ) {
+
+      // ما عندناش تفاصيل جاهزة: نسيب البوت الذكي يرد
+      return false;
+    }
+
+
+    reply =
+      `${template.details}\n\nتحب نرتب لك موعد معاينة؟ 🏢\nاكتب: *أبغى أوقف على العقار*`;
+
+  } else {
+
+    reply =
+      'أكيد 🌹 عندنا عروض كثيرة.\n\nوش نوع العقار اللي تدوّر عليه؟ (شقة، فيلا، أرض، عمارة...)\nوهل هو للشراء ولا للإيجار؟ وكم ميزانيتك تقريبًا؟';
+  }
+
+
+  await saveConversation(
+    customerPhone,
+    'user',
+    buttonText
+  );
+
+
+  await sendWhatsAppText(
+    customerPhone,
+    reply
+  );
+
+
+  await saveConversation(
+    customerPhone,
+    'assistant',
+    reply
+  );
+
+
+  if (
+    action === 'view'
+  ) {
+
+    await notifyTeam({
+      kind:
+        'viewing',
+      customerPhone,
+      property,
+      question:
+        buttonText,
+      note:
+        '👆 العميل ضغط زر المعاينة من رسالة العرض، تواصل معاه لترتيب الموعد',
+    });
+  }
 
 
   return true;
