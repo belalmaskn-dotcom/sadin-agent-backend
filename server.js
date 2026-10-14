@@ -215,6 +215,12 @@ async function initializeDatabase() {
   `);
 
 
+  // رقم الإدارة اتسجل "إيقاف" بالغلط لما كتب "الغاء"
+  await pool.query(
+    `DELETE FROM opt_outs WHERE customer_phone = '966530084666'`
+  );
+
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_broadcast_log_msg
     ON broadcast_log(message_id);
@@ -1102,6 +1108,7 @@ async function getViewingSession(
         FROM viewing_sessions
         WHERE customer_phone = $1
           AND status = 'active'
+          AND updated_at > NOW() - INTERVAL '24 hours'
         LIMIT 1
         `,
         [
@@ -1614,6 +1621,43 @@ async function processViewingFlow({
       session =
         updatedSession;
     }
+  }
+
+
+  // العميل لغى المعاينة
+  if (
+    /^(الغاء|الغي|كنسل|cancel|ما ابي|ماابي|ما ابغي|ماابغي|لا شكرا|خلاص)/.test(
+      normalizeArabic(userText).trim()
+    )
+  ) {
+
+    await closeViewingSession(
+      customerPhone
+    );
+
+
+    return {
+      handled: true,
+      completed: false,
+      reply:
+        'تمام 👍 لغيت طلب المعاينة. كيف أقدر أخدمك؟',
+    };
+  }
+
+
+  // العميل غيّر الموضوع (رسالته ما فيهاش يوم ولا وقت ولا نوع):
+  // نقفل المعاينة ونخلي البوت الذكي يرد عليه عادي
+  if (
+    !newViewingRequest &&
+    !Object.keys(updates).length
+  ) {
+
+    await closeViewingSession(
+      customerPhone
+    );
+
+
+    return null;
   }
 
 
@@ -3006,8 +3050,6 @@ function isOptOutMessage(
     'ايقاف العروض الترويجية',
     'stop promotions',
     'أيقاف',
-    'إلغاء',
-    'الغاء',
     'stop',
     'unsubscribe',
   ].includes(
