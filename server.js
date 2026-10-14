@@ -4429,6 +4429,16 @@ try {
           p.longitude
       );
 
+
+  try {
+
+    LOCATION_PROPERTIES =
+      LOCATION_PROPERTIES.concat(
+        require('./sadin-own-properties.json')
+      );
+
+  } catch (e) {}
+
 } catch (err) {
 
   console.error(
@@ -4509,6 +4519,17 @@ function scorePropertyInText(
   ) {
 
     score += 10;
+  }
+
+
+  if (
+    property.project &&
+    text.includes(
+      normalizeArabic(property.project)
+    )
+  ) {
+
+    score += 8;
   }
 
 
@@ -4653,7 +4674,27 @@ function findPropertyForLocation(
     }
 
 
-    // أكتر من عقار بنفس الدرجة: مش واضح
+    // أكتر من عقار بنفس الدرجة: لو كلهم من نفس المشروع، الموقع واحد
+    const tied =
+      scored.filter(
+        (x) =>
+          x.score === scored[0].score
+      );
+
+
+    if (
+      tied[0].property.project &&
+      tied.every(
+        (x) =>
+          x.property.project ===
+          tied[0].property.project
+      )
+    ) {
+
+      return tied[0].property;
+    }
+
+
     return null;
   }
 
@@ -4869,6 +4910,20 @@ async function handleLocationRequest({
 
 
   if (
+    property &&
+    !(property.latitude && property.longitude)
+  ) {
+
+    reply =
+      'أبشر 🌹 بيتواصل معك أحد من فريقنا ويرسل لك موقع العقار على طول.';
+
+
+    await sendWhatsAppText(
+      customerPhone,
+      reply
+    );
+
+  } else if (
     property
   ) {
 
@@ -4915,9 +4970,11 @@ async function handleLocationRequest({
     question:
       userText,
     note:
-      property
+      property && property.latitude
         ? '✅ تم إرسال الموقع للعميل تلقائيًا'
-        : '⚠️ البوت سأل العميل عن العقار المقصود',
+        : property
+          ? '⚠️ العقار ملوش لوكيشن عند البوت، ابعت الموقع للعميل'
+          : '⚠️ البوت سأل العميل عن العقار المقصود',
   });
 
 
@@ -5732,6 +5789,166 @@ async function handleTemplateButton({
 
 
 // =====================================================
+// عقارات سدين الخاصة (مشاريعنا) — من ملف sadin-own-properties.json
+// بتتضاف تلقائي لقاعدة البيانات كل ما السيرفر يشتغل
+// =====================================================
+
+let OWN_PROPERTIES = [];
+
+try {
+
+  OWN_PROPERTIES =
+    require('./sadin-own-properties.json');
+
+} catch (err) {
+
+  console.log(
+    'No sadin-own-properties.json found (optional)'
+  );
+}
+
+
+async function syncOwnProperties() {
+
+  if (
+    !OWN_PROPERTIES.length
+  ) {
+
+    return;
+  }
+
+
+  const sql = `
+    INSERT INTO bayut_properties (
+      bayut_id, rega_license, status, purpose, purpose_ar,
+      property_type, property_type_ar, title, title_ar,
+      description, description_ar, price, area, rooms, beds, baths,
+      city, district, street, street_width, property_face, property_age,
+      furnished, residence_type, completion_status,
+      plan_number, land_number, deed_number, notes, features,
+      latitude, longitude, bayut_url, rega_url,
+      posted_at, bayut_updated_at, expiry_date, images,
+      is_active, synced_at, updated_at
+    )
+    VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+      $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+      $31,$32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW()
+    )
+    ON CONFLICT (bayut_id)
+    DO UPDATE SET
+      status = EXCLUDED.status,
+      purpose = EXCLUDED.purpose,
+      purpose_ar = EXCLUDED.purpose_ar,
+      property_type = EXCLUDED.property_type,
+      property_type_ar = EXCLUDED.property_type_ar,
+      title = EXCLUDED.title,
+      title_ar = EXCLUDED.title_ar,
+      description_ar = EXCLUDED.description_ar,
+      price = EXCLUDED.price,
+      area = EXCLUDED.area,
+      rooms = EXCLUDED.rooms,
+      beds = EXCLUDED.beds,
+      baths = EXCLUDED.baths,
+      city = EXCLUDED.city,
+      district = EXCLUDED.district,
+      property_age = EXCLUDED.property_age,
+      furnished = EXCLUDED.furnished,
+      residence_type = EXCLUDED.residence_type,
+      completion_status = EXCLUDED.completion_status,
+      notes = EXCLUDED.notes,
+      features = EXCLUDED.features,
+      latitude = EXCLUDED.latitude,
+      longitude = EXCLUDED.longitude,
+      images = EXCLUDED.images,
+      is_active = EXCLUDED.is_active,
+      synced_at = NOW(),
+      updated_at = NOW()
+  `;
+
+
+  let ok = 0;
+
+
+  for (
+    const p
+    of OWN_PROPERTIES
+  ) {
+
+    try {
+
+      const active =
+        String(
+          p.status || 'Active'
+        ).toLowerCase() === 'active';
+
+
+      await pool.query(
+        sql,
+        [
+          Number(p.bayut_id),
+          p.rega_license || null,
+          p.status || 'Active',
+          p.purpose || null,
+          p.purpose_ar || null,
+          p.property_type || null,
+          p.property_type_ar || null,
+          p.title || null,
+          p.title_ar || null,
+          p.description || null,
+          p.description_ar || null,
+          p.price ?? null,
+          p.area ?? null,
+          p.rooms ?? null,
+          p.beds ?? null,
+          p.baths ?? null,
+          p.city || null,
+          p.district || null,
+          p.street || null,
+          p.street_width ?? null,
+          p.property_face || null,
+          p.property_age || null,
+          p.furnished || null,
+          p.residence_type || null,
+          p.completion_status || null,
+          null,
+          null,
+          null,
+          p.notes || null,
+          JSON.stringify(p.features || []),
+          p.latitude ?? null,
+          p.longitude ?? null,
+          p.bayut_url || null,
+          p.rega_url || null,
+          null,
+          null,
+          null,
+          JSON.stringify(p.images || []),
+          active,
+        ]
+      );
+
+
+      ok++;
+
+    } catch (err) {
+
+      console.error(
+        `Own property ${p.bayut_id} sync error:`,
+        err.message
+      );
+    }
+  }
+
+
+  console.log(
+    `Own properties synced: ${ok}/${OWN_PROPERTIES.length}`
+  );
+}
+
+
+// =====================================================
 // 404
 // =====================================================
 
@@ -5767,6 +5984,19 @@ async function startServer() {
 
 
     await initializeDatabase();
+
+
+    try {
+
+      await syncOwnProperties();
+
+    } catch (err) {
+
+      console.error(
+        'Own properties sync failed:',
+        err.message
+      );
+    }
 
 
     app.listen(
