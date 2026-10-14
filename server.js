@@ -5850,7 +5850,62 @@ try {
 }
 
 
+const ownSyncStatus = {
+  ranAt: null,
+  ok: 0,
+  errors: [],
+};
+
+
+app.get(
+  '/check/own-properties',
+  async (req, res) => {
+
+    let inDb = null;
+
+    let dbError = null;
+
+
+    try {
+
+      const r =
+        await pool.query(
+          `SELECT COUNT(*)::int AS n
+           FROM bayut_properties
+           WHERE bayut_id >= 900000000
+             AND is_active = TRUE`
+        );
+
+
+      inDb =
+        r.rows[0].n;
+
+    } catch (err) {
+
+      dbError =
+        err.message;
+    }
+
+
+    res.json({
+      inFile:
+        OWN_PROPERTIES.length,
+      inDatabase:
+        inDb,
+      lastSync:
+        ownSyncStatus,
+      dbError,
+    });
+  }
+);
+
+
 async function syncOwnProperties() {
+
+  ownSyncStatus.ranAt =
+    new Date().toISOString();
+
+  ownSyncStatus.errors = [];
 
   if (
     !OWN_PROPERTIES.length
@@ -5980,8 +6035,21 @@ async function syncOwnProperties() {
         `Own property ${p.bayut_id} sync error:`,
         err.message
       );
+
+
+      if (
+        ownSyncStatus.errors.length < 5
+      ) {
+
+        ownSyncStatus.errors.push(
+          `${p.bayut_id}: ${err.message}`
+        );
+      }
     }
   }
+
+
+  ownSyncStatus.ok = ok;
 
 
   console.log(
